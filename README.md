@@ -8,18 +8,17 @@ reproducible fastboot install path.
 ![device](https://img.shields.io/badge/device-OnePlus%206T%20fajita-2f6f8f)
 ![rootfs](https://img.shields.io/badge/rootfs-Arch%20Linux%20ARM-1793d1)
 ![kernel](https://img.shields.io/badge/golden%20kernel-PMOS%206.9%20SDM845-4c8eda)
-![status](https://img.shields.io/badge/status-sponsored%20development%20preview-8a63d2)
+![status](https://img.shields.io/badge/status-public%20development%20preview-4c8eda)
 ![install](https://img.shields.io/badge/install-fastboot%20userdata%20flash-555555)
 ![ui](https://img.shields.io/badge/ui-Hyprland%20%2B%20wvkbd-8a63d2)
 ![telephony](https://img.shields.io/badge/phone-ModemManager%20%2B%20GNOME%20Calls-4c8eda)
 
 ![Linux on mobile OnePlus 6T hero artwork](docs/assets/linux-on-mobile-hero.png)
 
-This sponsored development repository is the feature-forward OnePlus 6T line.
-It carries the current installer work, the richer phone UX overlay, the full
-userdata/Btrfs image path, the package picker, the first-boot account/network
-prompts, phone/SMS/audio helpers, rotation/input work, and the sponsor-preview
-phone shell.
+This is the public OnePlus 6T Arch Linux ARM installer. It carries the current
+installer work, the phone UX overlay, the full userdata/Btrfs image path, the
+package picker, the first-boot account/network prompts, phone/SMS/audio helpers,
+rotation/input work, boot video support, and the Hyprland phone shell.
 
 This project is not a generic rootfs tarball. It builds a matched OnePlus 6T
 boot/root image pair, checks the attached phone's real userdata size, verifies
@@ -53,10 +52,12 @@ The installer still stops before the destructive flash and asks you to type
 
 ## What You Get
 
-This is a practical Linux-phone for people who want to test real
-hardware rather than read a concept thread.
+This is a practical Linux-phone preview for people who want to test real
+hardware rather than read a concept thread. There used to be multiple release
+tracks; that split is gone. This repository is now the main public release
+path.
 
-| Surface | Current development behavior |
+| Surface | Current public image behavior |
 | --- | --- |
 | One-command entrypoint | `bash ./oneplus6t-install` checks USB/fastboot state, then hands off to the strict installer |
 | Release inputs | GitHub Release bundle fetch, SHA-256 verification, PMOS boot artifacts, firmware packages, and local aarch64 packages |
@@ -122,9 +123,12 @@ and well-supported enough by mainline-adjacent SDM845 work to be a serious
 Linux-phone proving ground. This repository turns that into something people
 can actually run:
 
-- a repeatable install path rather than a experiment;
+- a repeatable install path rather than a one-off lab image;
 - a clear hardware feature map rather than vague screenshots;
 - a conservative default kernel rather than crash-prone research features;
+- documented CLI primitives for people building their own phone UI;
+- a public profile that avoids private credentials and personal setup files
+  while still exposing the current development work.
 
 Project funding page:
 
@@ -144,16 +148,15 @@ pitch live at the bottom of this README:
 
 ## Visual Summary
 
-This is the feature-forward sponsored line: a more complete Linux-phone image
-for people who want to fund the work and test the newest installer, UI,
-telephony, audio, input, and hardware integration changes before they are
-promoted outward.
+This is the public development line: a Linux-phone image for people who want to
+test the newest installer, UI, telephony, audio, input, and hardware
+integration changes on real OnePlus 6T hardware.
 
 ### Project Visual Gallery
 
 These visuals are campaign assets for explaining the wider idea: Linux on real
-phone hardware, a desktop-class mobile environment, and a sponsored development
-track that funds faster progress toward a more capable open Linux phone.
+phone hardware, a desktop-class mobile environment, and public development that
+can be funded by people who want the work to keep moving.
 
 <p align="center">
   <img src="docs/assets/linux-in-your-pocket-wide.png" alt="Linux in your pocket wide visual" width="100%">
@@ -174,7 +177,7 @@ track that funds faster progress toward a more capable open Linux phone.
 | Stage | What happens |
 | --- | --- |
 | 1 | Bootloader-unlocked OnePlus 6T is placed in fastboot mode |
-| 2 | Sponsored installer checks USB/fastboot visibility |
+| 2 | Public installer checks USB/fastboot visibility |
 | 3 | Release inputs are fetched and verified |
 | 4 | Matched boot/root images are built for the attached phone |
 | 5 | User types `FLASH` at the destructive confirmation gate |
@@ -253,18 +256,12 @@ fastboot flashing unlock
 After the phone wipes itself, return to fastboot mode before running the
 installer. Do not relock the bootloader while this image is installed.
 
-## Fast Install Path
+## What The Launcher Runs
 
-If the bootloader is already unlocked and the phone is already in fastboot
-mode,the install flow is intentionally short:
-
-```sh
-git clone https://github.com/ToniMcQueen/oneplus6t-install-linux-Arch-on-arm-845.git
-cd oneplus6t-install-linux-Arch-on-arm-845
-./oneplus6t-install
-```
-
-The one-file launcher prints troubleshooting notes and then runs:
+For normal installs, use the copy/paste install block near the top of this
+README. The repository is public; no special GitHub access is required to clone
+or run it. The one-file launcher prints troubleshooting notes and then runs
+these internal steps:
 
 ```text
 ./scripts/check-phone.sh
@@ -281,7 +278,7 @@ The install experience is deliberately linear:
 
 1. Unlock the bootloader in OxygenOS.
 2. Reboot the phone into fastboot mode.
-3. Clone the sponsor repository.
+3. Clone this public repository.
 4. Run `./oneplus6t-install`.
 5. Confirm USB/fastboot visibility.
 6. Review or adjust the package list.
@@ -493,13 +490,14 @@ sequenceDiagram
   Host->>Phone: reboot or print manual fallback
 ```
 
-## Use The From-Start Installer
+## Use The Top-Level Launcher
 
-**For normal installs, use the repo's from-start installer. Do not begin with
-manual `fastboot flash` commands.**
+**For normal installs, run `./oneplus6t-install` from the repository root. Do
+not begin with manual `fastboot flash` commands.**
 
-The from-start installer is the supported entrypoint because it performs
-the required checks in the right order:
+The top-level launcher is the supported entrypoint because it performs the
+required checks in the right order, then hands off to the strict build/flash
+wrapper:
 
 - initializes source submodules such as `wvkbd`
 - fetches and verifies the release input bundle
@@ -510,9 +508,15 @@ the required checks in the right order:
 - runs the userdata preflight
 - flashes only after its normal confirmation prompt
 
-Run it from the repository root:
+Normal public entrypoint:
 
-```text
+```sh
+./oneplus6t-install
+```
+
+Advanced/debug entrypoint used internally by the launcher:
+
+```sh
 scripts/run-full-installer-from-start.sh oneplus-fajita
 ```
 
@@ -782,7 +786,7 @@ flowchart LR
 
 ## Status At A Glance
 
-| Area | Current sponsored-image status | Default image policy |
+| Area | Current public-image status | Default image policy |
 | --- | --- | --- |
 | Boot/root | Paired boot + full-userdata sparse root images | Ship matched pairs only |
 | Display/touch | DSI-1 1080x2340 Hyprland desktop and touchscreen | Included |
@@ -948,7 +952,7 @@ and root image must still be treated as a matched pair.
 ## Repository Layout
 
 ```text
-oneplus6t-install                       one-file sponsored install launcher
+oneplus6t-install                       one-file public install launcher
 profiles/oneplus-fajita/config.env       device profile and boot parameters
 profiles/oneplus-fajita/overlay/         files copied into the rootfs image
 scripts/build-bootimg.sh                 builds oneplus6t-arch-boot.img
@@ -1042,8 +1046,9 @@ existing `hexagonrpcd-*-aarch64.pkg.tar.*` first or build a recovery image with
 
 This project currently depends on the postmarketOS SDM845 OnePlus 6T boot stack.
 
-For normal installs, the strict from-start installer fetches this bundle
-automatically before it validates or builds the image:
+For normal installs, `./oneplus6t-install` calls the strict installer, which
+fetches this bundle automatically before it validates or builds the image.
+Maintainers can also run that lower-level step directly:
 
 ```text
 scripts/run-full-installer-from-start.sh oneplus-fajita
@@ -1060,7 +1065,10 @@ PMOS compatibility/reference payloads into the paths expected by the builders.
 The repo stays source-clean while the GitHub Release carries the large/generated
 inputs.
 
-
+In the public repository, release inputs should download without GitHub CLI
+login. If you are testing your own fork and moved the release assets somewhere
+else, set the release owner/repo/tag overrides or authenticate `gh` for that
+fork before fetching:
 
 ```text
 scripts/fetch-release-inputs.sh --install-deps
@@ -1383,15 +1391,15 @@ for prebuilt distribution: it does not rebuild the image and it does not flash
 the phone.
 
 ```sh
-TAG=first-hosted-sponsored scripts/package-prebuilt-flash-bundle.sh oneplus-fajita
+TAG=first-hosted-public scripts/package-prebuilt-flash-bundle.sh oneplus-fajita
 ```
 
 The script verifies the generated boot/root checksums, creates a self-contained
 flash bundle, and writes:
 
 ```text
-out/prebuilt/oneplus6t-archlinux-prebuilt-oneplus-fajita-first-hosted-sponsored.tar.zst
-out/prebuilt/oneplus6t-archlinux-prebuilt-oneplus-fajita-first-hosted-sponsored.tar.zst.sha256
+out/prebuilt/oneplus6t-archlinux-prebuilt-oneplus-fajita-first-hosted-public.tar.zst
+out/prebuilt/oneplus6t-archlinux-prebuilt-oneplus-fajita-first-hosted-public.tar.zst.sha256
 ```
 
 Upload both files to the website. A user who downloads and extracts the bundle
@@ -1967,7 +1975,7 @@ release checksums, signatures, and tagged release artifacts
 
 ```mermaid
 flowchart LR
-  Ready[Default sponsored image] --> Test[More device testing]
+  Ready[Default public image] --> Test[More device testing]
   Test --> Harden[SSH-key and password-hardening pass]
   Harden --> Sign[Release checksums and signatures]
   Sign --> Publish[Tagged public release]
@@ -1978,7 +1986,7 @@ flowchart LR
 Current milestone:
 
 ```text
-Sponsored-image line boots Arch Linux ARM from /dev/sda17 with display, touch,
+Public image line boots Arch Linux ARM from /dev/sda17 with display, touch,
 USB networking, Wi-Fi, Bluetooth audio, mobile data, loudspeaker, earpiece,
 sensors, and Hyprland auto-rotate working on the prototype.
 ```
