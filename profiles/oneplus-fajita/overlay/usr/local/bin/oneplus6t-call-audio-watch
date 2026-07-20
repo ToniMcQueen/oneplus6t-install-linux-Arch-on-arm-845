@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+route_cmd="${ONEPLUS6T_CALL_AUDIO_ROUTE_CMD:-/usr/local/bin/oneplus6t-audio-route}"
+interval="${ONEPLUS6T_CALL_AUDIO_POLL_SECONDS:-2}"
+active_call_routed=0
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+call_paths() {
+  command -v mmcli >/dev/null 2>&1 || return 1
+  timeout 4s mmcli -m any --voice-list-calls 2>/dev/null \
+    | awk 'match($0, /\/org\/freedesktop\/ModemManager1\/Call\/[0-9]+/) { print substr($0, RSTART, RLENGTH) }'
+}
+
+call_state() {
+  local path="$1"
+  timeout 4s mmcli -o "$path" 2>/dev/null \
+    | awk -F: '
+        /state:/ {
+          gsub(/^[ \t]+|[ \t]+$/, "", $2)
+          print tolower($2)
+          exit
+        }
+      '
+}
+
+has_live_call() {
+  local path state
+  while read -r path; do
+    [[ -n "$path" ]] || continue
+    state="$(call_state "$path" || true)"
+    case "$state" in
+      active|held|dialing|ringing-out)
+        return 0
+        ;;
+    esac
+  done < <(call_paths || true)
+
+  return 1
+}
+
+while true; do
+  if has_live_call; then
+    if [[ "$active_call_routed" == "0" ]]; then
+      "$route_cmd" earpiece >/dev/null 2>&1 || true
+      active_call_routed=1
+    fi
+  else
+    if [[ "$active_call_routed" == "1" ]]; then
+      "$route_cmd" loudspeaker >/dev/null 2>&1 || true
+      active_call_routed=0
+    fi
+  fi
+
+  sleep "$interval"
+done

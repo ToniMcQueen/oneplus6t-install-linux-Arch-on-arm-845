@@ -1,0 +1,14 @@
+[Unit]
+Description=Initialize the Arch Linux ARM pacman keyring
+Documentation=https://archlinuxarm.org/about/package-signing
+After=local-fs.target systemd-random-seed.service
+Before=getty@tty1.service
+ConditionPathExists=!/var/lib/oneplus6t/pacman-keyring-ready
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/oneplus6t-init-pacman-keyring
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

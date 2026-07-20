@@ -1,0 +1,12 @@
+[Unit]
+Description=Block logind power-key shutdown on OnePlus 6T
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/systemd-inhibit --what=handle-power-key --who=oneplus6t-arch --why=Hyprland-handles-phone-power-key --mode=block /usr/bin/sleep infinity
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

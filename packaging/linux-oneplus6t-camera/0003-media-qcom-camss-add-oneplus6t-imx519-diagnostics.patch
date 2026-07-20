@@ -1,0 +1,250 @@
+--- baseline/drivers/media/i2c/imx519.c	2025-02-04 23:28:55.000000000 +0000
++++ linux/drivers/media/i2c/imx519.c	2026-07-10 01:46:33.354613860 +0100
+@@ -1461,6 +1461,19 @@
+ 	const struct imx519_reg_list *reg_list;
+ 	int ret;
+ 
++	reg_list = &imx519->mode->reg_list;
++	dev_info(&client->dev,
++		 "oneplus6t-imx519: start stream mode=%ux%u crop=%u,%u/%ux%u line=0x%x link=%lld pixel=%u regs=%u common=%d vblank=%d hblank=%d exposure=%d\n",
++		 imx519->mode->width, imx519->mode->height,
++		 imx519->mode->crop.left, imx519->mode->crop.top,
++		 imx519->mode->crop.width, imx519->mode->crop.height,
++		 imx519->mode->line_length_pix,
++		 (s64)IMX519_DEFAULT_LINK_FREQ, IMX519_PIXEL_RATE,
++		 reg_list->num_of_regs, imx519->common_regs_written,
++		 imx519->vblank ? imx519->vblank->val : -1,
++		 imx519->hblank ? imx519->hblank->val : -1,
++		 imx519->exposure ? imx519->exposure->val : -1);
++
+ 	if (!imx519->common_regs_written) {
+ 		ret = cci_multi_reg_write(imx519->regmap, mode_common_regs,
+ 					  ARRAY_SIZE(mode_common_regs), NULL);
+@@ -1474,7 +1487,6 @@
+ 	}
+ 
+ 	/* Apply default values of current mode */
+-	reg_list = &imx519->mode->reg_list;
+ 	ret = cci_multi_reg_write(imx519->regmap, reg_list->regs,
+ 				  reg_list->num_of_regs, NULL);
+ 	if (ret) {
+@@ -1488,8 +1500,14 @@
+ 		return ret;
+ 
+ 	/* set stream on register */
+-	return cci_write(imx519->regmap, IMX519_REG_MODE_SELECT,
++	ret = cci_write(imx519->regmap, IMX519_REG_MODE_SELECT,
+ 			IMX519_MODE_STREAMING, NULL);
++	if (ret)
++		dev_err(&client->dev, "oneplus6t-imx519: stream-on write failed %d\n",
++			ret);
++	else
++		dev_info(&client->dev, "oneplus6t-imx519: stream-on register written\n");
++	return ret;
+ }
+ 
+ /* Stop streaming */
+@@ -1498,6 +1516,10 @@
+ 	struct i2c_client *client = v4l2_get_subdevdata(&imx519->sd);
+ 	int ret;
+ 
++	dev_info(&client->dev,
++		 "oneplus6t-imx519: stop stream mode=%ux%u\n",
++		 imx519->mode->width, imx519->mode->height);
++
+ 	/* set stream off register */
+ 	ret = cci_write(imx519->regmap, IMX519_REG_MODE_SELECT,
+ 			IMX519_MODE_STANDBY, NULL);
+@@ -1511,6 +1533,10 @@
+ 	struct i2c_client *client = v4l2_get_subdevdata(sd);
+ 	int ret = 0;
+ 
++	dev_info(&client->dev,
++		 "oneplus6t-imx519: s_stream enable=%d current=%d\n",
++		 enable, imx519->streaming);
++
+ 	mutex_lock(&imx519->mutex);
+ 	if (imx519->streaming == enable) {
+ 		mutex_unlock(&imx519->mutex);
+@@ -1849,6 +1875,16 @@
+ 		goto error_out;
+ 	}
+ 
++	dev_info(dev,
++		 "oneplus6t-imx519: endpoint bus=%u lanes=%u data=%u,%u,%u,%u link-freqs=%u first=%lld\n",
++		 ep_cfg.bus_type, ep_cfg.bus.mipi_csi2.num_data_lanes,
++		 ep_cfg.bus.mipi_csi2.data_lanes[0],
++		 ep_cfg.bus.mipi_csi2.data_lanes[1],
++		 ep_cfg.bus.mipi_csi2.data_lanes[2],
++		 ep_cfg.bus.mipi_csi2.data_lanes[3],
++		 ep_cfg.nr_of_link_frequencies,
++		 ep_cfg.nr_of_link_frequencies ? ep_cfg.link_frequencies[0] : -1LL);
++
+ 	/* Check the link frequency set in device tree */
+ 	if (!ep_cfg.nr_of_link_frequencies) {
+ 		dev_err(dev, "link-frequency property not found in DT\n");
+--- baseline/drivers/media/platform/qcom/camss/camss-csid-gen2.c	2026-07-10 01:45:26.132612196 +0100
++++ linux/drivers/media/platform/qcom/camss/camss-csid-gen2.c	2026-07-10 01:47:01.863614565 +0100
+@@ -180,23 +180,28 @@
+ 				struct csid_phy_config *phy, int vc)
+ {
+ 	u8 lane_cnt = csid->phy.lane_cnt;
+-	int val;
++	u32 cfg0, cfg1;
+ 
+ 	if (!lane_cnt)
+ 		lane_cnt = 4;
+ 
+-	val = (lane_cnt - 1) << CSI2_RX_CFG0_NUM_ACTIVE_LANES;
+-	val |= phy->lane_assign << CSI2_RX_CFG0_DL0_INPUT_SEL;
+-	val |= phy->csiphy_id << CSI2_RX_CFG0_PHY_NUM_SEL;
++	cfg0 = (lane_cnt - 1) << CSI2_RX_CFG0_NUM_ACTIVE_LANES;
++	cfg0 |= phy->lane_assign << CSI2_RX_CFG0_DL0_INPUT_SEL;
++	cfg0 |= phy->csiphy_id << CSI2_RX_CFG0_PHY_NUM_SEL;
+ 	if (phy->cphy)
+-		val |= 1 << CSI2_RX_CFG0_PHY_TYPE_SEL;
+-	writel_relaxed(val, csid->base + CSID_CSI2_RX_CFG0);
++		cfg0 |= 1 << CSI2_RX_CFG0_PHY_TYPE_SEL;
++	writel_relaxed(cfg0, csid->base + CSID_CSI2_RX_CFG0);
+ 
+-	val = 1 << CSI2_RX_CFG1_PACKET_ECC_CORRECTION_EN;
++	cfg1 = 1 << CSI2_RX_CFG1_PACKET_ECC_CORRECTION_EN;
+ 	if (vc > 3)
+-		val |= 1 << CSI2_RX_CFG1_VC_MODE;
+-	val |= 1 << CSI2_RX_CFG1_MISR_EN;
+-	writel_relaxed(val, csid->base + CSID_CSI2_RX_CFG1);
++		cfg1 |= 1 << CSI2_RX_CFG1_VC_MODE;
++	cfg1 |= 1 << CSI2_RX_CFG1_MISR_EN;
++	writel_relaxed(cfg1, csid->base + CSID_CSI2_RX_CFG1);
++
++	dev_info(csid->camss->dev,
++		 "oneplus6t-camss: csid%u rx vc=%d cphy=%u lanes=%u assign=0x%x csiphy=%u en_vc=0x%x cfg0=0x%08x cfg1=0x%08x\n",
++		 csid->id, vc, phy->cphy, lane_cnt, phy->lane_assign,
++		 phy->csiphy_id, csid->phy.en_vc, cfg0, cfg1);
+ }
+ 
+ static void __csid_ctrl_rdi(struct csid_device *csid, int enable, u8 rdi)
+@@ -268,6 +273,7 @@
+ 								   csid->res->formats->nformats,
+ 								   input_format->code);
+ 	u32 val;
++	u32 cfg0;
+ 
+ 	/*
+ 	 * DT_ID is a two bit bitfield that is concatenated with
+@@ -327,6 +333,13 @@
+ 	val = readl_relaxed(csid->base + CSID_RDI_CFG0(vc));
+ 	val |=  enable << RDI_CFG0_ENABLE;
+ 	writel_relaxed(val, csid->base + CSID_RDI_CFG0(vc));
++	cfg0 = val;
++
++	dev_info(csid->camss->dev,
++		 "oneplus6t-camss: csid%u rdi%u enable=%u fmt=0x%04x %ux%u dt=0x%02x decode=0x%x dt_id=%u cfg0=0x%08x\n",
++		 csid->id, vc, enable, input_format->code,
++		 input_format->width, input_format->height, format->data_type,
++		 format->decode_format, dt_id, cfg0);
+ }
+ 
+ static void csid_configure_stream(struct csid_device *csid, u8 enable)
+@@ -386,22 +399,34 @@
+ static irqreturn_t csid_isr(int irq, void *dev)
+ {
+ 	struct csid_device *csid = dev;
+-	u32 val;
++	u32 val, top, rx;
+ 	u8 reset_done;
+ 	int i;
+ 
+-	val = readl_relaxed(csid->base + CSID_TOP_IRQ_STATUS);
+-	writel_relaxed(val, csid->base + CSID_TOP_IRQ_CLEAR);
+-	reset_done = val & BIT(TOP_IRQ_STATUS_RESET_DONE);
+-
+-	val = readl_relaxed(csid->base + CSID_CSI2_RX_IRQ_STATUS);
+-	writel_relaxed(val, csid->base + CSID_CSI2_RX_IRQ_CLEAR);
++	top = readl_relaxed(csid->base + CSID_TOP_IRQ_STATUS);
++	writel_relaxed(top, csid->base + CSID_TOP_IRQ_CLEAR);
++	reset_done = top & BIT(TOP_IRQ_STATUS_RESET_DONE);
++	if (top)
++		dev_info_ratelimited(csid->camss->dev,
++				     "oneplus6t-camss: csid%u irq top=0x%08x\n",
++				     csid->id, top);
++
++	rx = readl_relaxed(csid->base + CSID_CSI2_RX_IRQ_STATUS);
++	writel_relaxed(rx, csid->base + CSID_CSI2_RX_IRQ_CLEAR);
++	if (rx)
++		dev_info_ratelimited(csid->camss->dev,
++				     "oneplus6t-camss: csid%u irq rx=0x%08x\n",
++				     csid->id, rx);
+ 
+ 	/* Read and clear IRQ status for each enabled RDI channel */
+ 	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++)
+ 		if (csid->phy.en_vc & BIT(i)) {
+ 			val = readl_relaxed(csid->base + CSID_CSI2_RDIN_IRQ_STATUS(i));
+ 			writel_relaxed(val, csid->base + CSID_CSI2_RDIN_IRQ_CLEAR(i));
++			if (val)
++				dev_info_ratelimited(csid->camss->dev,
++						     "oneplus6t-camss: csid%u irq rdi%d=0x%08x\n",
++						     csid->id, i, val);
+ 		}
+ 
+ 	val = 1 << IRQ_CMD_CLEAR;
+--- baseline/drivers/media/platform/qcom/camss/camss-csid.c	2025-02-04 23:28:55.000000000 +0000
++++ linux/drivers/media/platform/qcom/camss/camss-csid.c	2026-07-10 01:47:15.100614893 +0100
+@@ -1207,6 +1207,15 @@
+ 		csid->phy.cphy = lane_cfg->cphy;
+ 		csid->phy.lane_cnt = lane_cfg->num_data;
+ 		csid->phy.lane_assign = csid_get_lane_assign(lane_cfg);
++
++		dev_info(csid->camss->dev,
++			 "oneplus6t-camss: csid%u link csiphy%u cphy=%u lanes=%u assign=0x%x data=%u,%u,%u,%u\n",
++			 csid->id, csid->phy.csiphy_id, csid->phy.cphy,
++			 csid->phy.lane_cnt, csid->phy.lane_assign,
++			 lane_cfg->num_data > 0 ? lane_cfg->data[0].pos : 0xff,
++			 lane_cfg->num_data > 1 ? lane_cfg->data[1].pos : 0xff,
++			 lane_cfg->num_data > 2 ? lane_cfg->data[2].pos : 0xff,
++			 lane_cfg->num_data > 3 ? lane_cfg->data[3].pos : 0xff);
+ 	}
+ 	/* Decide which virtual channels to enable based on which source pads are enabled */
+ 	if (local->flags & MEDIA_PAD_FL_SOURCE) {
+--- baseline/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c	2026-07-10 01:45:26.135909361 +0100
++++ linux/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c	2026-07-10 01:47:58.628615970 +0100
+@@ -603,6 +603,11 @@
+ 		return;
+ 	}
+ 
++	dev_info(csiphy->camss->dev,
++		 "oneplus6t-camss: csiphy%u gen2 table cphy=%u num_data=%u lane_sets=%d array=%d settle=%u\n",
++		 csiphy->id, c->cphy, c->num_data, lane_sets, array_size,
++		 settle_cnt);
++
+ 	for (l = 0; l < lane_sets; l++) {
+ 		for (i = 0; i < array_size; i++, r++) {
+ 			switch (r->csiphy_param_type) {
+@@ -659,6 +664,16 @@
+ 
+ 	settle_cnt = csiphy_settle_cnt_calc(link_freq, csiphy->timer_clk_rate);
+ 
++	dev_info(csiphy->camss->dev,
++		 "oneplus6t-camss: csiphy%u lanes enable cphy=%u num_data=%u data=%u,%u,%u,%u link=%lld timer=%u settle=%u mask=0x%02x\n",
++		 csiphy->id, c->cphy, c->num_data,
++		 c->num_data > 0 ? c->data[0].pos : 0xff,
++		 c->num_data > 1 ? c->data[1].pos : 0xff,
++		 c->num_data > 2 ? c->data[2].pos : 0xff,
++		 c->num_data > 3 ? c->data[3].pos : 0xff,
++		 link_freq, csiphy->timer_clk_rate, settle_cnt,
++		 lane_mask);
++
+ 	val = CSIPHY_3PH_CMN_CSI_COMMON_CTRL5_CLK_ENABLE;
+ 	for (i = 0; i < c->num_data; i++)
+ 		val |= BIT(c->data[i].pos * 2);
+@@ -687,6 +702,10 @@
+ static void csiphy_lanes_disable(struct csiphy_device *csiphy,
+ 				 struct csiphy_config *cfg)
+ {
++	dev_info(csiphy->camss->dev,
++		 "oneplus6t-camss: csiphy%u lanes disable\n",
++		 csiphy->id);
++
+ 	writel_relaxed(0, csiphy->base +
+ 			  CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(5));
+ 

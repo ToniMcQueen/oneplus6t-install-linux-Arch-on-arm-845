@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+set -u
+
+WAIT_SECONDS="${ONEPLUS6T_WIFI_WAIT_SECONDS:-300}"
+FINAL_DELAY_SECONDS="${ONEPLUS6T_WIFI_FINAL_DELAY_SECONDS:-30}"
+DESKTOP_READY_MARKER="${ONEPLUS6T_DESKTOP_READY_MARKER:-/run/user/1000/oneplus6t-desktop-ready}"
+DESKTOP_READY_WAIT_SECONDS="${ONEPLUS6T_DESKTOP_READY_WAIT_SECONDS:-180}"
+LOCK_FILE="/run/oneplus6t-wifi-remoteproc.lock"
+
+log() {
+  printf 'oneplus6t-load-wifi-remoteproc: %s\n' "$*" >&2
+}
+
+module_loaded() {
+  local module="$1"
+  lsmod | awk -v "module=$module" '$1 == module { found = 1 } END { exit !found }'
+}
+
+remoteproc_state() {
+  local name_file state_file
+
+  for name_file in /sys/class/remoteproc/remoteproc*/name; do
+    [[ -e "$name_file" ]] || continue
+    if [[ "$(cat "$name_file" 2>/dev/null)" == "4080000.remoteproc" ]]; then
+      state_file="${name_file%/name}/state"
+      cat "$state_file" 2>/dev/null || true
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+wait_for_unit_active() {
+  local unit="$1"
+  local second
+
+  for second in $(seq 1 "$WAIT_SECONDS"); do
+    if systemctl is-active --quiet "$unit"; then
+      log "$unit is active after ${second}s"
+      return 0
+    fi
+    sleep 1
+  done
+
+  log "$unit did not become active"
+  return 1
+}
+
+wait_for_unit_finished() {
+  local unit="$1"
+  local state second
+
+  if ! systemctl list-unit-files "$unit" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  for second in $(seq 1 "$WAIT_SECONDS"); do
+    state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+    case "$state" in
+      active|activating|reloading)
+        sleep 1
+        ;;
+      *)
+        log "$unit is no longer active after ${second}s ($state)"
+        return 0
+        ;;
+    esac
+  done
+
+  log "$unit still active after ${WAIT_SECONDS}s"
+  return 1
+}
+
+wait_for_modem_running() {
+  local second state
+
+  for second in $(seq 1 "$WAIT_SECONDS"); do
+    state="$(remoteproc_state || true)"
+    if [[ "$state" == "running" ]]; then
+      log "modem remoteproc is running after ${second}s"
+      return 0
+    fi
+    sleep 1
+  done
+
+  log "modem remoteproc did not reach running state"
+  return 1
+}
+
+wait_for_desktop_ready() {
+  local second
+
+  if [[ -z "$DESKTOP_READY_MARKER" ]]; then
+    return 0
+  fi
+
+  for second in $(seq 1 "$DESKTOP_READY_WAIT_SECONDS"); do
+    if [[ -e "$DESKTOP_READY_MARKER" ]]; then
+      log "desktop marker appeared after ${second}s: $DESKTOP_READY_MARKER"
+      return 0
+    fi
+    sleep 1
+  done
+
+  log "desktop marker did not appear after ${DESKTOP_READY_WAIT_SECONDS}s; continuing late Wi-Fi bring-up"
+  return 0
+}
+
+wait_for_wlan0() {
+  local second
+
+  for second in $(seq 1 45); do
+    if ip link show wlan0 >/dev/null 2>&1; then
+      log "wlan0 appeared after ${second}s"
+      return 0
+    fi
+    sleep 1
+  done
+
+  log "wlan0 did not appear"
+  return 1
+}
+
+main() {
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    log "another Wi-Fi bring-up is already running"
+    return 0
+  fi
+
+  if module_loaded ath10k_snoc; then
+    log "ath10k_snoc already loaded"
+    wait_for_wlan0
+    return $?
+  fi
+
+  wait_for_unit_finished oneplus6t-hyperrotation-build.service || return 1
+  wait_for_unit_finished oneplus6t-wvkbd-build.service || return 1
+
+  wait_for_unit_active pmos-compat-tqftpserv.service || return 1
+  wait_for_unit_active pmos-compat-rmtfs.service || return 1
+  wait_for_unit_active pmos-compat-pd-mapper.service || return 1
+  wait_for_unit_active NetworkManager.service || return 1
+  wait_for_modem_running || return 1
+  wait_for_desktop_ready
+
+  log "settling for ${FINAL_DELAY_SECONDS}s before Wi-Fi remoteproc"
+  sleep "$FINAL_DELAY_SECONDS"
+  udevadm settle --timeout=20 || true
+
+  if modprobe ath10k_snoc; then
+    log "loaded ath10k_snoc"
+  else
+    log "failed to load ath10k_snoc"
+    return 1
+  fi
+
+  wait_for_wlan0
+}
+
+main "$@"

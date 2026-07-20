@@ -1,0 +1,14 @@
+[Unit]
+Description=Build and install wvkbd on-screen keyboard
+Documentation=https://github.com/jjsullivan5196/wvkbd
+After=local-fs.target
+
+[Service]
+Type=oneshot
+Environment=WVKBD_REPO=https://github.com/jjsullivan5196/wvkbd.git
+Environment=WVKBD_REF=4fd182a58385b4754756e6dc66860e9ff601b3a1
+Environment=WVKBD_LAYOUT=deskintl
+ExecStart=/usr/local/sbin/oneplus6t-install-wvkbd
+
+[Install]
+WantedBy=multi-user.target

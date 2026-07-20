@@ -1,0 +1,28 @@
+OnePlus 6T Arch Linux ARM Installer
+Copyright (c) 2026 Toni McQueen
+
+This repository contains Toni McQueen original installer, profile, build,
+documentation, and project-owned asset work licensed under O6T-LINUX-1.0,
+except where another licence or third-party notice applies.
+
+O6T-LINUX-1.0 is adapted from the BOOTY-1.1 Booty Original Ownership Terms
+and Yield-Back Licence model.
+
+Every source or binary redistribution of the Toni McQueen original project
+material must retain:
+
+- LICENSE
+- NOTICE
+- docs/THIRD-PARTY-NOTICES.md
+
+Third-party components are not relicensed by this project. Recipients must
+preserve and follow the applicable upstream notices and licences for kernel
+materials, postmarketOS-derived inputs, Arch Linux ARM packages, firmware,
+vendor source trees, libraries, configuration files, and other third-party
+materials.
+
+Project funding:
+https://tonimcqueen.com/pay/
+
+Project contact:
+contact@tonimcqueen.com

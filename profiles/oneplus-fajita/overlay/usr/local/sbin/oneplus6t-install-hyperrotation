@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="${HYPERROTATION_REPO:-https://github.com/mcqueentrading/oneplus6t-hyper-rotation.git}"
+ref="${HYPERROTATION_REF:-38606861f25a2aec1eaefae38f3bcb8d0c332972}"
+src="${HYPERROTATION_SOURCE_DIR:-/var/cache/oneplus6t/hyperrotation}"
+dest="/home/alarm/.config/hypr/plugins/hyperrotation.so"
+
+if [[ -f "$dest" ]]; then
+  exit 0
+fi
+
+for tool in git make g++ pkg-config; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "oneplus6t-install-hyperrotation: missing build tool: $tool" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -f "$src/Makefile" ]]; then
+  rm -rf "$src"
+  mkdir -p "$(dirname "$src")"
+  git clone "$repo" "$src"
+fi
+
+if git -C "$src" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! git -C "$src" cat-file -e "${ref}^{commit}" 2>/dev/null; then
+    git -C "$src" fetch --tags --force origin
+  fi
+  git -C "$src" checkout --detach "$ref"
+fi
+
+if ! pkg-config --exists hyprland; then
+  echo "oneplus6t-install-hyperrotation: hyprland.pc is missing; install Hyprland development headers first" >&2
+  exit 1
+fi
+
+make -C "$src" clean
+make -C "$src" -j"$(nproc)"
+
+install -d -m 0755 /home/alarm/.config/hypr/plugins
+install -m 0755 "$src/hyperrotation.so" "$dest"
+chown -R alarm:alarm /home/alarm/.config/hypr/plugins

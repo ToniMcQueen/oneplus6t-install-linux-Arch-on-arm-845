@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG="${ONEPLUS6T_BLUETOOTH_CONFIG:-/etc/oneplus6t-bluetooth.conf}"
+STATE_DIR="${ONEPLUS6T_STATE_DIR:-/var/lib/oneplus6t}"
+STATE_FILE="$STATE_DIR/bluetooth-address"
+BLUETOOTH_ADDRESS="${BLUETOOTH_ADDRESS:-}"
+BTMGMT_TIMEOUT="${BTMGMT_TIMEOUT:-8s}"
+
+if [[ -r "$CONFIG" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG"
+fi
+
+log() {
+  printf 'oneplus6t-bluetooth-address: %s\n' "$*" >&2
+}
+
+valid_addr() {
+  [[ "$1" =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]]
+}
+
+cmdline_value() {
+  local key="$1"
+  tr ' ' '\n' < /proc/cmdline | awk -F= -v wanted="$key" '$1 == wanted { print $2; exit }'
+}
+
+seed_value() {
+  local seed
+  seed="$(cmdline_value androidboot.serialno || true)"
+  if [[ -n "$seed" ]]; then
+    printf 'androidboot.serialno:%s\n' "$seed"
+    return 0
+  fi
+  if [[ -s /etc/machine-id ]]; then
+    printf 'machine-id:%s\n' "$(cat /etc/machine-id)"
+    return 0
+  fi
+  printf 'boot-id:%s\n' "$(cat /proc/sys/kernel/random/boot_id)"
+}
+
+generated_addr() {
+  local seed hex b0
+  seed="$(seed_value)"
+  hex="$(printf '%s' "$seed" | sha256sum | awk '{ print $1 }')"
+  b0=$(( (0x${hex:0:2} | 0x02) & 0xfe ))
+  printf '%02X:%s:%s:%s:%s:%s\n' \
+    "$b0" "${hex:2:2}" "${hex:4:2}" "${hex:6:2}" "${hex:8:2}" "${hex:10:2}" \
+    | tr '[:lower:]' '[:upper:]'
+}
+
+address_to_use() {
+  if [[ -n "$BLUETOOTH_ADDRESS" ]]; then
+    if ! valid_addr "$BLUETOOTH_ADDRESS"; then
+      log "invalid BLUETOOTH_ADDRESS in $CONFIG: $BLUETOOTH_ADDRESS"
+      exit 2
+    fi
+    printf '%s\n' "$BLUETOOTH_ADDRESS" | tr '[:lower:]' '[:upper:]'
+    return 0
+  fi
+
+  if [[ -s "$STATE_FILE" ]]; then
+    local saved
+    saved="$(tr -d '[:space:]' < "$STATE_FILE")"
+    if valid_addr "$saved"; then
+      printf '%s\n' "$saved" | tr '[:lower:]' '[:upper:]'
+      return 0
+    fi
+  fi
+
+  mkdir -p "$STATE_DIR"
+  generated_addr | tee "$STATE_FILE"
+}
+
+persist_address() {
+  local addr="$1"
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$addr" > "$STATE_FILE"
+}
+
+controller_addr_from_info() {
+  awk '$1 == "addr" { print $2; exit }'
+}
+
+run_btmgmt() {
+  local cmd arg
+
+  if [[ -t 0 ]] || ! command -v script >/dev/null 2>&1; then
+    timeout -k 1s "$BTMGMT_TIMEOUT" btmgmt "$@"
+    return
+  fi
+
+  printf -v cmd '%s' 'btmgmt'
+  for arg in "$@"; do
+    printf -v cmd '%s %q' "$cmd" "$arg"
+  done
+  timeout -k 1s "$BTMGMT_TIMEOUT" script -q -e -c "$cmd" /dev/null
+}
+
+wait_for_controller() {
+  local i
+  for i in $(seq 1 20); do
+    if [[ -e /sys/class/bluetooth/hci0 ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "Bluetooth controller did not appear"
+  exit 1
+}
+
+use_existing_controller() {
+  local info="$1"
+  local addr="$2"
+  local current
+
+  if ! printf '%s\n' "$info" | grep -q 'Primary controller'; then
+    return 1
+  fi
+
+  current="$(printf '%s\n' "$info" | controller_addr_from_info)"
+  if valid_addr "$current"; then
+    if [[ -z "$BLUETOOTH_ADDRESS" ]]; then
+      persist_address "$current"
+    fi
+    if [[ "$current" == "$addr" ]]; then
+      log "Bluetooth controller already configured as $current"
+    else
+      log "Bluetooth controller already configured as $current; keeping existing address"
+    fi
+  else
+    log "Bluetooth controller already configured"
+  fi
+  run_btmgmt --index 0 power on >/dev/null 2>&1 || true
+  return 0
+}
+
+main() {
+  local addr info
+
+  if ! command -v btmgmt >/dev/null 2>&1; then
+    log "btmgmt is not installed"
+    exit 0
+  fi
+  if ! command -v timeout >/dev/null 2>&1; then
+    log "timeout is not installed"
+    exit 0
+  fi
+
+  addr="$(address_to_use)"
+  wait_for_controller
+
+  info="$(run_btmgmt info 2>/dev/null || true)"
+  if use_existing_controller "$info" "$addr"; then
+    exit 0
+  fi
+
+  log "setting Bluetooth public address to $addr"
+  if ! run_btmgmt --index 0 public-addr "$addr"; then
+    info="$(run_btmgmt info 2>/dev/null || true)"
+    if use_existing_controller "$info" "$addr"; then
+      exit 0
+    fi
+    log "failed to set Bluetooth public address"
+    exit 1
+  fi
+  run_btmgmt --index 0 power on >/dev/null 2>&1 || true
+
+  info="$(run_btmgmt info 2>/dev/null || true)"
+  if ! use_existing_controller "$info" "$addr"; then
+    log "controller still missing after setting address"
+    exit 1
+  fi
+}
+
+main "$@"

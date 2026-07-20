@@ -1,0 +1,14 @@
+[Unit]
+Description=Configure OnePlus 6T Bluetooth public address
+Wants=bluetooth.service
+After=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/oneplus6t-bluetooth-address
+RemainAfterExit=yes
+TimeoutStartSec=45
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

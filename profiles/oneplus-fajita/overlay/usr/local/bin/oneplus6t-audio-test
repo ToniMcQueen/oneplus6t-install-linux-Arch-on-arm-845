@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+card="${ONEPLUS6T_AUDIO_CARD:-alsa_card.platform-sound}"
+volume="${ONEPLUS6T_AUDIO_TEST_VOLUME:-30%}"
+seconds="${ONEPLUS6T_AUDIO_TEST_SECONDS:-4}"
+test_file="${ONEPLUS6T_AUDIO_TEST_FILE:-/usr/share/sounds/alsa/Front_Center.wav}"
+route_cmd="${ONEPLUS6T_AUDIO_ROUTE_CMD:-/usr/local/bin/oneplus6t-audio-route}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+resolve_session_uid() {
+  local uid user pid owner runtime
+
+  if [[ -n "${ONEPLUS6T_SESSION_UID:-}" && -d "/run/user/$ONEPLUS6T_SESSION_UID" ]]; then
+    printf '%s\n' "$ONEPLUS6T_SESSION_UID"
+    return 0
+  fi
+
+  if [[ -n "${ONEPLUS6T_SESSION_USER:-}" ]]; then
+    uid="$(id -u "$ONEPLUS6T_SESSION_USER" 2>/dev/null || true)"
+    if [[ -n "$uid" && -d "/run/user/$uid" ]]; then
+      printf '%s\n' "$uid"
+      return 0
+    fi
+  fi
+
+  if command -v pgrep >/dev/null 2>&1; then
+    while read -r pid; do
+      [[ -n "$pid" ]] || continue
+      owner="$(stat -c '%u' "/proc/$pid" 2>/dev/null || true)"
+      if [[ "$owner" =~ ^[0-9]+$ && "$owner" -ge 1000 && -d "/run/user/$owner" ]]; then
+        printf '%s\n' "$owner"
+        return 0
+      fi
+    done < <(pgrep Hyprland 2>/dev/null || true)
+  fi
+
+  for runtime in /run/user/[0-9]*; do
+    [[ -d "$runtime" ]] || continue
+    uid="${runtime##*/}"
+    if [[ "$uid" =~ ^[0-9]+$ && "$uid" -ge 1000 ]]; then
+      printf '%s\n' "$uid"
+      return 0
+    fi
+  done
+
+  if [[ -d /run/user/1000 ]]; then
+    printf '%s\n' "1000"
+    return 0
+  fi
+
+  user="$(awk -F: '$3 >= 1000 && $1 != "nobody" { print $1; exit }' /etc/passwd 2>/dev/null || true)"
+  [[ -n "$user" ]] && id -u "$user" 2>/dev/null
+}
+
+resolve_user_for_uid() {
+  local uid="$1"
+  getent passwd "$uid" 2>/dev/null | awk -F: '{ print $1; exit }'
+}
+
+if [[ "${ONEPLUS6T_AUDIO_TEST_AS_USER:-1}" == "1" && "$(id -u)" == "0" ]] \
+  && command -v runuser >/dev/null 2>&1; then
+  session_uid="$(resolve_session_uid || true)"
+  session_user="$(resolve_user_for_uid "${session_uid:-}" || true)"
+  if [[ -n "${session_uid:-}" && -n "${session_user:-}" ]]; then
+    exec runuser -u "$session_user" -- env \
+    XDG_RUNTIME_DIR="/run/user/$session_uid" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$session_uid/bus" \
+    ONEPLUS6T_AUDIO_TEST_AS_USER=0 \
+    ONEPLUS6T_AUDIO_CARD="$card" \
+    ONEPLUS6T_AUDIO_TEST_VOLUME="$volume" \
+    ONEPLUS6T_AUDIO_TEST_SECONDS="$seconds" \
+    ONEPLUS6T_AUDIO_TEST_FILE="$test_file" \
+    ONEPLUS6T_AUDIO_ROUTE_CMD="$route_cmd" \
+    /usr/local/bin/oneplus6t-audio-test "$@"
+  fi
+fi
+
+usage() {
+  cat <<EOF
+Usage: oneplus6t-audio-test COMMAND
+
+Commands:
+  profiles     Show OnePlus 6T card profiles and current sinks
+  loudspeaker  Play a short test on the HiFi loudspeaker route, then keep HiFi
+  earpiece     Play a short test on the Voice Call earpiece route, then restore HiFi
+  restore      Restore the normal HiFi loudspeaker route
+
+Environment:
+  ONEPLUS6T_AUDIO_TEST_VOLUME   default: 30%
+  ONEPLUS6T_AUDIO_TEST_SECONDS  default: 4
+  ONEPLUS6T_AUDIO_TEST_FILE     default: /usr/share/sounds/alsa/Front_Center.wav
+EOF
+}
+
+need_pactl() {
+  command -v pactl >/dev/null 2>&1 || {
+    echo "oneplus6t-audio-test: pactl is required" >&2
+    exit 1
+  }
+  pactl info >/dev/null 2>&1 || {
+    echo "oneplus6t-audio-test: PipeWire/PulseAudio is not reachable" >&2
+    exit 1
+  }
+}
+
+route_audio() {
+  local route="$1"
+  if [[ -x "$route_cmd" ]]; then
+    ONEPLUS6T_AUDIO_ROUTE_VOLUME= "$route_cmd" "$route"
+  else
+    case "$route" in
+      loudspeaker)
+        pactl set-card-profile "$card" HiFi
+        ;;
+      earpiece)
+        pactl set-card-profile "$card" "Voice Call"
+        ;;
+    esac
+    sleep 1
+  fi
+}
+
+find_sink() {
+  local pattern="$1"
+  pactl list short sinks 2>/dev/null | awk -v pattern="$pattern" '$2 ~ pattern { print $2; exit }'
+}
+
+find_first_real_sink() {
+  pactl list short sinks 2>/dev/null | awk '$2 !~ /[Dd]ummy/ { print $2; exit }'
+}
+
+set_default_sink() {
+  local sink="$1"
+  pactl set-default-sink "$sink"
+  pactl set-sink-volume "$sink" "$volume"
+}
+
+restore_hifi() {
+  local sink
+  route_audio loudspeaker
+  sink="$(find_sink "Speaker|pro-output-2|output-2")"
+  [[ -n "${sink:-}" ]] || sink="$(find_first_real_sink)"
+  if [[ -n "${sink:-}" ]]; then
+    set_default_sink "$sink"
+    echo "Restored loudspeaker sink: $sink"
+  else
+    echo "Restored loudspeaker route, but no non-dummy sink was listed." >&2
+  fi
+}
+
+play_target() {
+  local sink="$1"
+  if command -v pw-play >/dev/null 2>&1 && [[ -f "$test_file" ]]; then
+    timeout "${seconds}s" pw-play --target "$sink" "$test_file"
+  elif command -v speaker-test >/dev/null 2>&1; then
+    timeout "${seconds}s" speaker-test -D default -t sine -f 880 -l 1
+  else
+    echo "oneplus6t-audio-test: no pw-play test file or speaker-test available" >&2
+    return 1
+  fi
+}
+
+show_profiles() {
+  pactl list cards | sed -n '/alsa_card.platform-sound/,/Active Profile/p'
+  echo
+  pactl list short sinks
+}
+
+test_loudspeaker() {
+  local sink
+  restore_hifi
+  sink="$(find_sink "Speaker|pro-output-2|output-2")"
+  [[ -n "${sink:-}" ]] || sink="$(find_first_real_sink)"
+  [[ -n "${sink:-}" ]] || {
+    echo "oneplus6t-audio-test: no loudspeaker sink found" >&2
+    exit 1
+  }
+  echo "Playing test on loudspeaker sink: $sink"
+  play_target "$sink"
+}
+
+test_earpiece() {
+  local sink
+  trap restore_hifi EXIT
+  route_audio earpiece
+  sink="$(find_sink "Earpiece|pro-output-0|output-0")"
+  [[ -n "${sink:-}" ]] || sink="$(find_first_real_sink)"
+  [[ -n "${sink:-}" ]] || {
+    echo "oneplus6t-audio-test: no call earpiece sink found" >&2
+    exit 1
+  }
+  set_default_sink "$sink"
+  echo "Playing test on call earpiece sink: $sink"
+  play_target "$sink"
+}
+
+need_pactl
+
+case "${1:-}" in
+  profiles)
+    show_profiles
+    ;;
+  loudspeaker)
+    test_loudspeaker
+    ;;
+  earpiece)
+    test_earpiece
+    ;;
+  restore)
+    restore_hifi
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+card="${ONEPLUS6T_AUDIO_CARD:-alsa_card.platform-sound}"
+volume="${ONEPLUS6T_AUDIO_ROUTE_VOLUME:-}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+resolve_session_uid() {
+  local uid user pid owner runtime
+
+  if [[ -n "${ONEPLUS6T_SESSION_UID:-}" && -d "/run/user/$ONEPLUS6T_SESSION_UID" ]]; then
+    printf '%s\n' "$ONEPLUS6T_SESSION_UID"
+    return 0
+  fi
+
+  if [[ -n "${ONEPLUS6T_SESSION_USER:-}" ]]; then
+    uid="$(id -u "$ONEPLUS6T_SESSION_USER" 2>/dev/null || true)"
+    if [[ -n "$uid" && -d "/run/user/$uid" ]]; then
+      printf '%s\n' "$uid"
+      return 0
+    fi
+  fi
+
+  if command -v pgrep >/dev/null 2>&1; then
+    while read -r pid; do
+      [[ -n "$pid" ]] || continue
+      owner="$(stat -c '%u' "/proc/$pid" 2>/dev/null || true)"
+      if [[ "$owner" =~ ^[0-9]+$ && "$owner" -ge 1000 && -d "/run/user/$owner" ]]; then
+        printf '%s\n' "$owner"
+        return 0
+      fi
+    done < <(pgrep Hyprland 2>/dev/null || true)
+  fi
+
+  for runtime in /run/user/[0-9]*; do
+    [[ -d "$runtime" ]] || continue
+    uid="${runtime##*/}"
+    if [[ "$uid" =~ ^[0-9]+$ && "$uid" -ge 1000 ]]; then
+      printf '%s\n' "$uid"
+      return 0
+    fi
+  done
+
+  if [[ -d /run/user/1000 ]]; then
+    printf '%s\n' "1000"
+    return 0
+  fi
+
+  user="$(awk -F: '$3 >= 1000 && $1 != "nobody" { print $1; exit }' /etc/passwd 2>/dev/null || true)"
+  [[ -n "$user" ]] && id -u "$user" 2>/dev/null
+}
+
+resolve_user_for_uid() {
+  local uid="$1"
+  getent passwd "$uid" 2>/dev/null | awk -F: '{ print $1; exit }'
+}
+
+if [[ "${ONEPLUS6T_AUDIO_ROUTE_AS_USER:-1}" == "1" && "$(id -u)" == "0" ]] \
+  && command -v runuser >/dev/null 2>&1; then
+  session_uid="$(resolve_session_uid || true)"
+  session_user="$(resolve_user_for_uid "${session_uid:-}" || true)"
+  if [[ -n "${session_uid:-}" && -n "${session_user:-}" ]]; then
+    exec runuser -u "$session_user" -- env \
+    XDG_RUNTIME_DIR="/run/user/$session_uid" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$session_uid/bus" \
+    ONEPLUS6T_AUDIO_ROUTE_AS_USER=0 \
+    ONEPLUS6T_AUDIO_CARD="$card" \
+    ONEPLUS6T_AUDIO_ROUTE_VOLUME="$volume" \
+    /usr/local/bin/oneplus6t-audio-route "$@"
+  fi
+fi
+
+usage() {
+  cat <<EOF
+Usage: oneplus6t-audio-route COMMAND
+
+Commands:
+  profiles      Show OnePlus 6T card profiles and sinks
+  status        Show active profile and sinks
+  loudspeaker   Route media/speakerphone output to HiFi loudspeaker
+  speakerphone  Route call output and mic to Voice Call loudspeaker
+  earpiece      Route call output and mic to Voice Call earpiece
+  restore       Alias for loudspeaker
+
+Optional environment:
+  ONEPLUS6T_AUDIO_ROUTE_VOLUME=40%
+EOF
+}
+
+need_pactl() {
+  command -v pactl >/dev/null 2>&1 || {
+    echo "oneplus6t-audio-route: pactl is required" >&2
+    exit 1
+  }
+  pactl info >/dev/null 2>&1 || {
+    echo "oneplus6t-audio-route: PipeWire/PulseAudio is not reachable" >&2
+    exit 1
+  }
+}
+
+find_sink() {
+  local pattern="$1"
+  pactl list short sinks 2>/dev/null | awk -v pattern="$pattern" '$2 ~ pattern { print $2; exit }'
+}
+
+find_source() {
+  local pattern="$1"
+  pactl list short sources 2>/dev/null | awk -v pattern="$pattern" '$2 ~ pattern { print $2; exit }'
+}
+
+find_first_real_sink() {
+  pactl list short sinks 2>/dev/null | awk '$2 !~ /[Dd]ummy/ { print $2; exit }'
+}
+
+find_first_real_source() {
+  pactl list short sources 2>/dev/null | awk '$2 !~ /[Mm]onitor|[Dd]ummy/ { print $2; exit }'
+}
+
+apply_ucm_hifi_speaker() {
+  command -v alsaucm >/dev/null 2>&1 || return 1
+
+  local ucm_card
+  for ucm_card in O6T "OnePlus 6T" sdm845; do
+    if alsaucm -c "$ucm_card" set _verb HiFi set _enadev Speaker >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+apply_ucm_voice_device() {
+  local playback_device="$1"
+
+  command -v alsaucm >/dev/null 2>&1 || return 1
+
+  local ucm_card
+  for ucm_card in O6T "OnePlus 6T" sdm845; do
+    if alsaucm -c "$ucm_card" \
+      set _verb "Voice Call" \
+      set _enadev "$playback_device" \
+      set _enadev Mic >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+move_streams_to_sink() {
+  local sink="$1"
+  pactl list short sink-inputs 2>/dev/null \
+    | awk '{ print $1 }' \
+    | while read -r input_id; do
+        [[ -n "$input_id" ]] || continue
+        pactl move-sink-input "$input_id" "$sink" >/dev/null 2>&1 || true
+      done
+}
+
+move_source_outputs_to_source() {
+  local source="$1"
+  pactl list short source-outputs 2>/dev/null \
+    | awk '{ print $1 }' \
+    | while read -r output_id; do
+        [[ -n "$output_id" ]] || continue
+        pactl move-source-output "$output_id" "$source" >/dev/null 2>&1 || true
+      done
+}
+
+set_sink() {
+  local sink="$1"
+  pactl set-default-sink "$sink"
+  pactl set-sink-mute "$sink" 0 >/dev/null 2>&1 || true
+  if [[ -n "${volume:-}" ]]; then
+    pactl set-sink-volume "$sink" "$volume"
+  fi
+  move_streams_to_sink "$sink"
+}
+
+set_source() {
+  local source="$1"
+  pactl set-default-source "$source"
+  pactl set-source-mute "$source" 0 >/dev/null 2>&1 || true
+  move_source_outputs_to_source "$source"
+}
+
+show_profiles() {
+  pactl list cards | sed -n '/alsa_card.platform-sound/,/Active Profile/p'
+  echo
+  pactl list short sinks
+  echo
+  pactl list short sources
+}
+
+show_status() {
+  pactl list cards | awk '
+    /Name: alsa_card.platform-sound/ { in_card = 1 }
+    in_card && /Active Profile:/ { print; in_card = 0 }
+  '
+  pactl list short sinks
+  pactl list short sources
+}
+
+route_loudspeaker() {
+  local sink
+  apply_ucm_hifi_speaker || true
+  pactl set-card-profile "$card" HiFi >/dev/null 2>&1 || true
+  sleep 1
+  sink="$(find_sink "Speaker")"
+  if [[ -z "${sink:-}" ]]; then
+    apply_ucm_hifi_speaker || true
+    pactl set-card-profile "$card" pro-audio >/dev/null 2>&1 || true
+    sleep 1
+    sink="$(find_sink "pro-output-2|output-2")"
+  fi
+  if [[ -z "${sink:-}" ]]; then
+    sink="$(find_first_real_sink)"
+  fi
+  [[ -n "${sink:-}" ]] || {
+    echo "oneplus6t-audio-route: no OnePlus 6T speaker sink found" >&2
+    exit 1
+  }
+  set_sink "$sink"
+  echo "Routed to loudspeaker: $sink"
+}
+
+route_earpiece() {
+  local sink source
+  apply_ucm_voice_device Earpiece || true
+  pactl set-card-profile "$card" "Voice Call" >/dev/null 2>&1 || true
+  sleep 1
+  sink="$(find_sink "Voice_Call.*Earpiece|Earpiece")"
+  source="$(find_source "Voice_Call.*Mic|Mic")"
+  if [[ -z "${sink:-}" || -z "${source:-}" ]]; then
+    apply_ucm_voice_device Earpiece || true
+    pactl set-card-profile "$card" pro-audio >/dev/null 2>&1 || true
+    sleep 1
+    [[ -n "${sink:-}" ]] || sink="$(find_sink "pro-output-0|output-0")"
+    [[ -n "${source:-}" ]] || source="$(find_source "pro-input-1|input-1")"
+  fi
+  [[ -n "${sink:-}" ]] || sink="$(find_first_real_sink)"
+  [[ -n "${source:-}" ]] || source="$(find_first_real_source)"
+  [[ -n "${sink:-}" ]] || {
+    echo "oneplus6t-audio-route: no Voice Call Earpiece sink found" >&2
+    exit 1
+  }
+  set_sink "$sink"
+  if [[ -n "${source:-}" ]]; then
+    set_source "$source"
+    echo "Routed to Voice Call earpiece: $sink; mic: $source"
+  else
+    echo "Routed to Voice Call earpiece: $sink; no call mic source found" >&2
+  fi
+}
+
+route_call_speaker() {
+  local sink source
+  apply_ucm_voice_device Speaker || true
+  pactl set-card-profile "$card" "Voice Call" >/dev/null 2>&1 || true
+  sleep 1
+  sink="$(find_sink "Voice_Call.*Speaker|Speaker")"
+  source="$(find_source "Voice_Call.*Mic|Mic")"
+  if [[ -z "${sink:-}" || -z "${source:-}" ]]; then
+    apply_ucm_voice_device Speaker || true
+    pactl set-card-profile "$card" pro-audio >/dev/null 2>&1 || true
+    sleep 1
+    [[ -n "${sink:-}" ]] || sink="$(find_sink "pro-output-2|output-2")"
+    [[ -n "${source:-}" ]] || source="$(find_source "pro-input-1|input-1")"
+  fi
+  [[ -n "${sink:-}" ]] || sink="$(find_first_real_sink)"
+  [[ -n "${source:-}" ]] || source="$(find_first_real_source)"
+  [[ -n "${sink:-}" ]] || {
+    echo "oneplus6t-audio-route: no Voice Call Speaker sink found" >&2
+    exit 1
+  }
+  set_sink "$sink"
+  if [[ -n "${source:-}" ]]; then
+    set_source "$source"
+    echo "Routed to Voice Call speakerphone: $sink; mic: $source"
+  else
+    echo "Routed to Voice Call speakerphone: $sink; no call mic source found" >&2
+  fi
+}
+
+need_pactl
+
+case "${1:-}" in
+  profiles)
+    show_profiles
+    ;;
+  status)
+    show_status
+    ;;
+  loudspeaker|speaker|media|hifi|HiFi|restore)
+    route_loudspeaker
+    ;;
+  speakerphone|call-speaker|call-speakerphone)
+    route_call_speaker
+    ;;
+  earpiece|call|"Voice Call")
+    route_earpiece
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac

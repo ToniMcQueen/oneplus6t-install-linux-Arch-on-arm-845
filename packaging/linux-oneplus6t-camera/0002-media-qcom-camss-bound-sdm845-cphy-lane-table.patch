@@ -1,0 +1,64 @@
+From: LinuxPhone project <linuxphone@localhost>
+Subject: [PATCH] media: qcom: camss: bound SDM845 C-PHY lane table programming
+
+The SDM845 2-phase lane table has five entries: clock plus four D-PHY data
+lanes. The SDM845 3-phase C-PHY table has three entries, one per trio.
+
+The Gen2 lane programming helper still iterated five lane sets regardless of
+which table was selected. That is valid for the D-PHY table, but walks past the
+end of the SDM845 C-PHY register table used by the OnePlus 6/6T main rear
+IMX519 path.
+
+Track the selected table's first dimension and only program entries that exist.
+This keeps the current three-trio C-PHY device-tree graph intact while removing
+an out-of-bounds register programming path before running lane-map experiments.
+---
+ drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c b/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
+--- a/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
++++ b/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
+@@ -573,7 +573,7 @@
+ {
+ 	struct csiphy_lanes_cfg *c = &cfg->csi2->lane_cfg;
+ 	const struct csiphy_reg_t *r;
+-	int i, l, array_size;
++	int i, l, array_size, lane_sets;
+ 	u32 val;
+ 
+ 	switch (csiphy->camss->res->version) {
+@@ -581,25 +581,29 @@
+ 		if (c->cphy) {
+ 			r = &lane_regs_sdm845_3ph[0][0];
+ 			array_size = ARRAY_SIZE(lane_regs_sdm845_3ph[0]);
++			lane_sets = ARRAY_SIZE(lane_regs_sdm845_3ph);
+ 		} else {
+ 			r = &lane_regs_sdm845[0][0];
+ 			array_size = ARRAY_SIZE(lane_regs_sdm845[0]);
++			lane_sets = ARRAY_SIZE(lane_regs_sdm845);
+ 		}
+ 		break;
+ 	case CAMSS_8250:
+ 		r = &lane_regs_sm8250[0][0];
+ 		array_size = ARRAY_SIZE(lane_regs_sm8250[0]);
++		lane_sets = ARRAY_SIZE(lane_regs_sm8250);
+ 		break;
+ 	case CAMSS_8280XP:
+ 		r = &lane_regs_sc8280xp[0][0];
+ 		array_size = ARRAY_SIZE(lane_regs_sc8280xp[0]);
++		lane_sets = ARRAY_SIZE(lane_regs_sc8280xp);
+ 		break;
+ 	default:
+ 		WARN(1, "unknown cspi version\n");
+ 		return;
+ 	}
+ 
+-	for (l = 0; l < 5; l++) {
++	for (l = 0; l < lane_sets; l++) {
+ 		for (i = 0; i < array_size; i++, r++) {
+ 			switch (r->csiphy_param_type) {
+ 			case CSIPHY_SETTLE_CNT_LOWER_BYTE:
+-- 
+2.50.1
+

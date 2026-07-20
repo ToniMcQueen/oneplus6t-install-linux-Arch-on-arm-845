@@ -1,0 +1,19 @@
+[Unit]
+Description=Server for FastRPC remote procedure calls from Qualcomm SDSP
+DefaultDependencies=no
+Wants=oneplus6t-qcom-remoteproc.service
+After=systemd-udevd.service systemd-udev-trigger.service oneplus6t-qcom-remoteproc.service
+Before=sysinit.target
+ConditionPathExists=/usr/bin/hexagonrpcd
+StartLimitIntervalSec=0
+
+[Service]
+ExecStartPre=/usr/local/sbin/oneplus6t-wait-fastrpc-sdsp
+ExecStart=/usr/bin/hexagonrpcd -f /dev/fastrpc-sdsp -d sdsp -s -R /usr/share/qcom/sdm845/OnePlus/oneplus6
+Restart=always
+RestartSec=3
+User=fastrpc
+Group=fastrpc
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Server for FastRPC remote procedure calls from Qualcomm ADSP RootPD
+Conflicts=suspend.target
+Before=suspend.target
+ConditionPathExists=/usr/bin/hexagonrpcd
+ConditionPathExists=!/dev/fastrpc-sdsp
+ConditionPathExists=/dev/fastrpc-adsp
+
+[Service]
+ExecStart=/usr/bin/hexagonrpcd -f /dev/fastrpc-adsp -d adsp -R /usr/share/qcom/sdm845/OnePlus/oneplus6
+Restart=always
+RestartSec=3
+User=fastrpc
+Group=fastrpc
+
+[Install]
+WantedBy=multi-user.target

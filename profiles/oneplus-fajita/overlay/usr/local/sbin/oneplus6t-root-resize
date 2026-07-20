@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -eu
+
+if ! findmnt -n -o FSTYPE / | grep -qx btrfs; then
+  exit 0
+fi
+
+/usr/bin/btrfs filesystem resize max /

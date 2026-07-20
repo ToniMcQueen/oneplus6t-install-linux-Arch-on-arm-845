@@ -1,0 +1,11 @@
+[Unit]
+Description=Resize OnePlus 6T Btrfs root filesystem to fill userdata
+ConditionPathIsMountPoint=/
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/oneplus6t-root-resize
+
+[Install]
+WantedBy=multi-user.target

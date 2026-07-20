@@ -1,0 +1,16 @@
+# commit	author	subject	upstream-status
+00f72a51d17df062684b8a2a7eb8d03d86e96d87	Vladimir Zapolskiy	arm64: dts: qcom: sdm845: Fix interrupt types of camss interrupts	track
+a5f467e449f865888db9cf22d921a031672f429e	Caleb Connolly	media: qcom: camss: csiphy-3ph: Add Gen2 v1.1 MIPI CSI-2 CPHY init	track
+144a78c8e0c092c9e9e6adfe3f14664014d46018	David Heidelberg	media: qcom: camss: Add sdm845 c-phy basic support	track
+8752ae2abd6ef141014c48885e93a5bca5d9ffec	David Heidelberg	media: qcom: camss: Prepare CSID for C-PHY support	track
+490a91de1edae47895df598e5d020f518a4705b4	Dr. Git	media: i2c: Add imx371 image sensor driver	carry
+4ab4472ed49f39e565c749bb0a70e009ca5e0559	Dr. Git	media: i2c: Add imx376 image sensor driver	carry
+635de40b6689710ee2af89dc0399e52d15c00894	Dr. Git	media: i2c: Add imx519 image sensor driver	carry
+26f9dfad4030de634dbf50f398f95281c29c3965	Dr. Git	arm64: dts: qcom: sdm845-oneplus: camera bringup	carry
+local-0001	LinuxPhone project	media: qcom: camss: set the CSID C-PHY selector bit correctly	submit
+local-0002	LinuxPhone project	media: qcom: camss: bound SDM845 C-PHY lane table programming	lab-submit
+local-0003	LinuxPhone project	media: qcom: camss: add OnePlus 6T IMX519 diagnostics	lab-debug
+local-0004	LinuxPhone project	media: qcom: camss: add OnePlus 6T C-PHY lab overrides	lab-debug
+local-0005	LinuxPhone project	media: i2c: imx519: add OnePlus 6T stream readbacks	lab-debug
+local-0007	LinuxPhone project	media: qcom: camss: add OnePlus 6T runtime state dumps	lab-debug
+local-0008	LinuxPhone project	media: qcom: camss: log OnePlus 6T CSIPHY state	lab-debug

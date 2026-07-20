@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+import ctypes
+import fcntl
+import os
+import sys
+import time
+import zipfile
+from io import BytesIO
+
+try:
+    from PIL import Image
+except Exception as exc:
+    print(f"oneplus6t-bootanimation: Pillow unavailable: {exc}", file=sys.stderr)
+    sys.exit(0)
+
+
+FBIOGET_VSCREENINFO = 0x4600
+FBIOGET_FSCREENINFO = 0x4602
+
+
+class FbBitfield(ctypes.Structure):
+    _fields_ = [
+        ("offset", ctypes.c_uint32),
+        ("length", ctypes.c_uint32),
+        ("msb_right", ctypes.c_uint32),
+    ]
+
+
+class FbVarScreeninfo(ctypes.Structure):
+    _fields_ = [
+        ("xres", ctypes.c_uint32),
+        ("yres", ctypes.c_uint32),
+        ("xres_virtual", ctypes.c_uint32),
+        ("yres_virtual", ctypes.c_uint32),
+        ("xoffset", ctypes.c_uint32),
+        ("yoffset", ctypes.c_uint32),
+        ("bits_per_pixel", ctypes.c_uint32),
+        ("grayscale", ctypes.c_uint32),
+        ("red", FbBitfield),
+        ("green", FbBitfield),
+        ("blue", FbBitfield),
+        ("transp", FbBitfield),
+        ("nonstd", ctypes.c_uint32),
+        ("activate", ctypes.c_uint32),
+        ("height", ctypes.c_uint32),
+        ("width", ctypes.c_uint32),
+        ("accel_flags", ctypes.c_uint32),
+        ("pixclock", ctypes.c_uint32),
+        ("left_margin", ctypes.c_uint32),
+        ("right_margin", ctypes.c_uint32),
+        ("upper_margin", ctypes.c_uint32),
+        ("lower_margin", ctypes.c_uint32),
+        ("hsync_len", ctypes.c_uint32),
+        ("vsync_len", ctypes.c_uint32),
+        ("sync", ctypes.c_uint32),
+        ("vmode", ctypes.c_uint32),
+        ("rotate", ctypes.c_uint32),
+        ("colorspace", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32 * 4),
+    ]
+
+
+class FbFixScreeninfo(ctypes.Structure):
+    _fields_ = [
+        ("id", ctypes.c_char * 16),
+        ("smem_start", ctypes.c_ulong),
+        ("smem_len", ctypes.c_uint32),
+        ("type", ctypes.c_uint32),
+        ("type_aux", ctypes.c_uint32),
+        ("visual", ctypes.c_uint32),
+        ("xpanstep", ctypes.c_uint16),
+        ("ypanstep", ctypes.c_uint16),
+        ("ywrapstep", ctypes.c_uint16),
+        ("line_length", ctypes.c_uint32),
+        ("mmio_start", ctypes.c_ulong),
+        ("mmio_len", ctypes.c_uint32),
+        ("accel", ctypes.c_uint32),
+        ("capabilities", ctypes.c_uint16),
+        ("reserved", ctypes.c_uint16 * 2),
+    ]
+
+
+def env_float(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return float(default)
+
+
+def wait_for_fb(path):
+    deadline = time.monotonic() + env_float("ONEPLUS6T_BOOTANIMATION_WAIT_FB", "2")
+    while not os.path.exists(path):
+        if time.monotonic() >= deadline:
+            raise FileNotFoundError(path)
+        time.sleep(0.1)
+
+
+def framebuffer_info(fd):
+    var = FbVarScreeninfo()
+    fix = FbFixScreeninfo()
+    fcntl.ioctl(fd, FBIOGET_VSCREENINFO, var)
+    fcntl.ioctl(fd, FBIOGET_FSCREENINFO, fix)
+    return var, fix
+
+
+def parse_desc(zf):
+    with zf.open("desc.txt") as desc:
+        lines = [
+            line.strip()
+            for line in desc.read().decode("utf-8", "replace").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+    if not lines:
+        raise ValueError("empty desc.txt")
+    head = lines[0].split()
+    if len(head) < 3:
+        raise ValueError("desc.txt header must be: width height fps")
+    fps = max(1, int(head[2]))
+    parts = []
+    for line in lines[1:]:
+        fields = line.split()
+        if len(fields) < 4 or fields[0] not in ("p", "c"):
+            continue
+        try:
+            count = max(0, int(fields[1]))
+            pause = max(0, int(fields[2]))
+        except ValueError:
+            continue
+        parts.append((count, pause, fields[3].strip("/")))
+    if not parts:
+        parts.append((1, 0, "part0"))
+    return fps, parts
+
+
+def frame_names(zf, part_dir):
+    prefix = f"{part_dir.rstrip('/')}/"
+    names = [
+        name
+        for name in zf.namelist()
+        if name.startswith(prefix)
+        and name.lower().endswith((".jpg", ".jpeg", ".png", ".bmp"))
+    ]
+    return sorted(names)
+
+
+def convert_frame(img, var):
+    rgba = img.convert("RGBA")
+    if var.bits_per_pixel == 32:
+        if (var.red.offset, var.green.offset, var.blue.offset) == (16, 8, 0):
+            return rgba.tobytes("raw", "BGRA"), 4
+        if (var.red.offset, var.green.offset, var.blue.offset) == (0, 8, 16):
+            return rgba.tobytes("raw", "RGBA"), 4
+    if var.bits_per_pixel == 16 and (
+        var.red.offset,
+        var.green.offset,
+        var.blue.offset,
+        var.red.length,
+        var.green.length,
+        var.blue.length,
+    ) == (11, 5, 0, 5, 6, 5):
+        rgb = rgba.convert("RGB")
+        out = bytearray()
+        for red, green, blue in rgb.getdata():
+            value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+            out.append(value & 0xFF)
+            out.append((value >> 8) & 0xFF)
+        return bytes(out), 2
+    raise RuntimeError(
+        "unsupported framebuffer format: "
+        f"{var.bits_per_pixel}bpp "
+        f"r{var.red.offset}/{var.red.length} "
+        f"g{var.green.offset}/{var.green.length} "
+        f"b{var.blue.offset}/{var.blue.length}"
+    )
+
+
+def write_region(fd, data, width, height, bytes_per_pixel, var, fix):
+    x0 = max(0, (int(var.xres) - width) // 2) + int(var.xoffset)
+    y0 = max(0, (int(var.yres) - height) // 2) + int(var.yoffset)
+    row_bytes = width * bytes_per_pixel
+    if row_bytes == int(fix.line_length) and width == int(var.xres):
+        os.lseek(fd, y0 * int(fix.line_length), os.SEEK_SET)
+        os.write(fd, data)
+        return
+    for row in range(height):
+        offset = (y0 + row) * int(fix.line_length) + x0 * bytes_per_pixel
+        start = row * row_bytes
+        os.lseek(fd, offset, os.SEEK_SET)
+        os.write(fd, data[start : start + row_bytes])
+
+
+def clear_fb(fd, var, fix):
+    row = b"\0" * int(fix.line_length)
+    os.lseek(fd, 0, os.SEEK_SET)
+    for _ in range(int(var.yres)):
+        os.write(fd, row)
+
+
+def render_size(img, var):
+    max_w = int(var.xres)
+    max_h = int(var.yres)
+    fit = os.environ.get("ONEPLUS6T_BOOTANIMATION_SCALE", "fit").strip().lower()
+    if fit == "native":
+        return min(img.width, max_w), min(img.height, max_h)
+    ratio = min(max_w / img.width, max_h / img.height)
+    return max(1, int(img.width * ratio)), max(1, int(img.height * ratio))
+
+
+def sleep_until(next_frame, deadline):
+    sleep_for = min(next_frame, deadline) - time.monotonic()
+    if sleep_for > 0:
+        time.sleep(sleep_for)
+
+
+def play_frame(zf, name, fd, var, fix):
+    with zf.open(name) as item:
+        img = Image.open(BytesIO(item.read()))
+        img.load()
+    width, height = render_size(img, var)
+    frame = img.resize((width, height), Image.Resampling.LANCZOS)
+    data, bytes_per_pixel = convert_frame(frame, var)
+    write_region(fd, data, width, height, bytes_per_pixel, var, fix)
+
+
+def main():
+    animation = os.environ.get(
+        "ONEPLUS6T_BOOTANIMATION_ZIP",
+        "/usr/share/oneplus6t/bootanimation.zip",
+    )
+    fb_path = os.environ.get("ONEPLUS6T_BOOTANIMATION_FB", "/dev/fb0")
+
+    if not os.path.isfile(animation):
+        return 0
+    try:
+        wait_for_fb(fb_path)
+        with zipfile.ZipFile(animation) as zf:
+            max_seconds = env_float("ONEPLUS6T_BOOTANIMATION_MAX_SECONDS", "8")
+            if max_seconds <= 0:
+                return 0
+            fps, parts = parse_desc(zf)
+            frame_delay = 1.0 / max(1, fps)
+            deadline = time.monotonic() + max_seconds
+
+            with open(fb_path, "r+b", buffering=0) as fb:
+                fd = fb.fileno()
+                var, fix = framebuffer_info(fd)
+                clear_fb(fd, var, fix)
+                next_frame = time.monotonic()
+                while time.monotonic() < deadline:
+                    rendered_any = False
+                    for count, pause, part_dir in parts:
+                        names = frame_names(zf, part_dir)
+                        if not names:
+                            continue
+                        loops = count
+                        loop = 0
+                        while time.monotonic() < deadline and (loops == 0 or loop < loops):
+                            for name in names:
+                                if time.monotonic() >= deadline:
+                                    break
+                                play_frame(zf, name, fd, var, fix)
+                                rendered_any = True
+                                next_frame += frame_delay
+                                sleep_until(next_frame, deadline)
+                            if pause > 0 and time.monotonic() < deadline:
+                                next_frame += pause * frame_delay
+                                sleep_until(next_frame, deadline)
+                            loop += 1
+                    if not rendered_any or all(count > 0 for count, _pause, _part in parts):
+                        break
+    except Exception as exc:
+        print(f"oneplus6t-bootanimation: skipped: {exc}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

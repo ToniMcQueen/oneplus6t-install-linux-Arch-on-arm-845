@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="560" viewBox="0 0 1160 560" role="img" aria-labelledby="title desc">
+  <title id="title">OnePlus 6T bootloader unlock and fastboot flow</title>
+  <desc id="desc">A visual guide showing Android developer options, OEM unlocking, fastboot mode, bootloader unlock, and installer flashing.</desc>
+  <defs>
+    <linearGradient id="phone" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#1f2937"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .warn { fill: #fff7ed; stroke: #fb923c; stroke-width: 2; }
+      .ok { fill: #ecfdf5; stroke: #10b981; stroke-width: 2; }
+      .title { font: 700 24px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .label { font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .body { font: 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .mono { font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #0f172a; }
+      .small { font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .button { fill: #e2e8f0; stroke: #94a3b8; stroke-width: 1.5; }
+      .screen { fill: #111827; }
+      .screenText { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #d1fae5; }
+      .arrow { stroke: #334155; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1160" height="560" rx="0"/>
+  <text class="title" x="40" y="54">OnePlus 6T: unlock bootloader, then enter fastboot</text>
+  <text class="body" x="40" y="82">Unlocking wipes Android user data. Do this before running the Arch Linux installer.</text>
+
+  <g transform="translate(54 126)">
+    <rect class="card" width="188" height="298" rx="22"/>
+    <rect x="39" y="18" width="110" height="230" rx="16" fill="url(#phone)"/>
+    <rect x="50" y="42" width="88" height="156" rx="6" fill="#111827"/>
+    <text class="screenText" x="58" y="72">Settings</text>
+    <text class="screenText" x="58" y="96">About phone</text>
+    <text class="screenText" x="58" y="120">Build number</text>
+    <text class="screenText" x="58" y="146">tap x7</text>
+    <circle cx="94" cy="224" r="9" fill="#334155"/>
+    <text class="label" x="24" y="278">1. Developer mode</text>
+  </g>
+
+  <path class="arrow" d="M260 274 H338"/>
+
+  <g transform="translate(352 126)">
+    <rect class="card" width="188" height="298" rx="22"/>
+    <rect x="39" y="18" width="110" height="230" rx="16" fill="url(#phone)"/>
+    <rect x="50" y="42" width="88" height="156" rx="6" fill="#111827"/>
+    <text class="screenText" x="58" y="72">Developer</text>
+    <text class="screenText" x="58" y="96">options</text>
+    <text class="screenText" x="58" y="126">OEM unlock</text>
+    <rect x="58" y="140" width="64" height="24" rx="12" fill="#10b981"/>
+    <circle cx="108" cy="152" r="9" fill="#ecfdf5"/>
+    <text class="label" x="24" y="278">2. OEM unlocking</text>
+  </g>
+
+  <path class="arrow" d="M558 274 H636"/>
+
+  <g transform="translate(650 126)">
+    <rect class="warn" width="210" height="298" rx="12"/>
+    <text class="label" x="20" y="42">3. Fastboot mode</text>
+    <text class="body" x="20" y="76">Use Android:</text>
+    <text class="mono" x="20" y="104">adb reboot bootloader</text>
+    <text class="body" x="20" y="140">Or use buttons:</text>
+    <rect class="button" x="20" y="160" width="78" height="34" rx="7"/>
+    <text class="small" x="33" y="182">Vol Up</text>
+    <text class="body" x="107" y="183">+</text>
+    <rect class="button" x="128" y="160" width="62" height="34" rx="7"/>
+    <text class="small" x="141" y="182">Power</text>
+    <text class="small" x="20" y="232">Hold while booting until</text>
+    <text class="small" x="20" y="254">the bootloader screen appears.</text>
+  </g>
+
+  <path class="arrow" d="M880 274 H958"/>
+
+  <g transform="translate(972 126)">
+    <rect class="ok" width="146" height="298" rx="12"/>
+    <text class="label" x="18" y="42">4. Unlock</text>
+    <text class="mono" x="18" y="82">fastboot</text>
+    <text class="mono" x="18" y="104">oem unlock</text>
+    <line x1="18" y1="130" x2="128" y2="130" stroke="#94a3b8" stroke-width="1"/>
+    <text class="small" x="18" y="164">Confirm on</text>
+    <text class="small" x="18" y="184">the phone.</text>
+    <text class="small" x="18" y="220">Then re-enter</text>
+    <text class="small" x="18" y="240">fastboot and</text>
+    <text class="small" x="18" y="260">run installer.</text>
+  </g>
+
+  <g transform="translate(54 458)">
+    <rect class="warn" width="504" height="60" rx="10"/>
+    <text class="label" x="18" y="25">T-Mobile US carrier-locked devices</text>
+    <text class="body" x="18" y="47">May require an unlock token; MSMDownloadTool/EDL conversion is separate recovery work.</text>
+  </g>
+
+  <g transform="translate(650 458)">
+    <rect class="card" width="468" height="60" rx="10"/>
+    <text class="label" x="18" y="25">Host must see fastboot cleanly</text>
+    <text class="mono" x="18" y="48">fastboot devices -l  &amp;&amp;  fastboot getvar product</text>
+  </g>
+</svg>

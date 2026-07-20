@@ -1,0 +1,136 @@
+#!/usr/bin/env sh
+set -eu
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+[ -d "$runtime_dir" ] || runtime_dir=/tmp
+pidfile="$runtime_dir/oneplus6t-osk.pid"
+logfile="$runtime_dir/oneplus6t-osk.log"
+statefile="$runtime_dir/oneplus6t-osk.state"
+action="${1:-toggle}"
+
+detect_session_env() {
+  export XDG_RUNTIME_DIR="$runtime_dir"
+
+  if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    for socket in "$runtime_dir"/wayland-*; do
+      [ -S "$socket" ] || continue
+      export WAYLAND_DISPLAY="${socket##*/}"
+      break
+    done
+  fi
+
+  [ -n "${XDG_SESSION_TYPE:-}" ] || export XDG_SESSION_TYPE=wayland
+  [ -n "${XDG_CURRENT_DESKTOP:-}" ] || export XDG_CURRENT_DESKTOP=Hyprland
+
+  if [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+    for instance in "$runtime_dir"/hypr/*; do
+      [ -S "$instance/.socket.sock" ] || continue
+      export HYPRLAND_INSTANCE_SIGNATURE="${instance##*/}"
+    done
+  fi
+}
+
+find_osk() {
+  for bin in wvkbd-deskintl wvkbd-mobintl wvkbd wvkbd-mobintl-dark; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      command -v "$bin"
+      return 0
+    fi
+  done
+  return 1
+}
+
+osk_basename() {
+  basename "$1"
+}
+
+is_wvkbd() {
+  case "$(osk_basename "$1")" in
+    wvkbd*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+running_pid() {
+  if [ -f "$pidfile" ]; then
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+hide() {
+  pid="$(running_pid || true)"
+  osk="$(find_osk || true)"
+
+  if [ -n "${pid:-}" ] && [ -n "${osk:-}" ] && is_wvkbd "$osk"; then
+    kill -USR1 "$pid" 2>/dev/null || true
+    printf 'hidden\n' > "$statefile"
+    return 0
+  fi
+
+  if [ -n "${pid:-}" ]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pidfile"
+  printf 'hidden\n' > "$statefile"
+}
+
+show() {
+  pid="$(running_pid || true)"
+  osk="$(find_osk || true)"
+
+  if [ -n "${pid:-}" ] && [ -n "${osk:-}" ] && is_wvkbd "$osk"; then
+    kill -USR2 "$pid" 2>/dev/null || true
+    printf 'visible\n' > "$statefile"
+    return 0
+  fi
+
+  if [ -z "${osk:-}" ]; then
+    detect_session_env
+    if command -v hyprctl >/dev/null 2>&1; then
+      hyprctl notify -1 6000 "rgb(ff5555)" "No on-screen keyboard installed."
+    fi
+    return 1
+  fi
+
+  detect_session_env
+  if is_wvkbd "$osk"; then
+    # Match the last working Sysboard phone dimensions: full screen width,
+    # 864 px portrait height, and 520 px landscape height.
+    "$osk" \
+      -H "${ONEPLUS6T_OSK_HEIGHT:-864}" \
+      -L "${ONEPLUS6T_OSK_LANDSCAPE_HEIGHT:-520}" \
+      --fn "${ONEPLUS6T_OSK_FONT:-Sans 18}" \
+      >"$logfile" 2>&1 &
+  else
+    "$osk" >"$logfile" 2>&1 &
+  fi
+  printf '%s\n' "$!" > "$pidfile"
+
+  printf 'visible\n' > "$statefile"
+}
+
+case "$action" in
+  show)
+    show
+    ;;
+  hide)
+    hide
+    ;;
+  toggle)
+    if [ "$(cat "$statefile" 2>/dev/null || true)" = "visible" ]; then
+      hide
+    else
+      show
+    fi
+    ;;
+  *)
+    echo "Usage: oneplus6t-osk [show|hide|toggle]" >&2
+    exit 2
+    ;;
+esac

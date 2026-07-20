@@ -1,0 +1,145 @@
+# Maintainer: LinuxPhone project
+# Camera branch provenance is recorded in camera-series.tsv.
+
+pkgname=linux-oneplus6t-camera
+pkgver=6.13.0
+pkgrel=12
+pkgdesc="Pinned SDM845 camera kernel for the OnePlus 6 and 6T"
+arch=('aarch64')
+url="https://gitlab.com/sdm845-mainline/linux"
+license=('GPL-2.0-only')
+provides=('linux-aarch64')
+conflicts=('linux-aarch64')
+replaces=('linux-aarch64')
+makedepends=('bc' 'bison' 'cpio' 'flex' 'gzip' 'kmod' 'openssl' 'pahole' 'perl' 'python' 'rsync' 'tar' 'zstd')
+options=('!strip')
+
+_commit=26f9dfad4030de634dbf50f398f95281c29c3965
+_pmaports_commit=817ed870e92a64963d926354fb74c75090811fcc
+_config="config-postmarketos-qcom-sdm845.aarch64"
+_srcdir="linux-${_commit}"
+
+source=(
+  "${pkgname}-${_commit}.tar.gz::https://gitlab.com/sdm845-mainline/linux/-/archive/${_commit}/linux-${_commit}.tar.gz"
+  "${_config}::https://gitlab.com/postmarketOS/pmaports/-/raw/${_pmaports_commit}/device/community/linux-postmarketos-qcom-sdm845/${_config}"
+  'camera.config'
+  'hibernate.config'
+  'camera-series.tsv'
+  '0001-media-qcom-camss-set-csid-cphy-bit.patch'
+  '0002-media-qcom-camss-bound-sdm845-cphy-lane-table.patch'
+  '0003-media-qcom-camss-add-oneplus6t-imx519-diagnostics.patch'
+  '0004-media-qcom-camss-add-oneplus6t-cphy-lab-overrides.patch'
+  '0005-media-i2c-imx519-add-oneplus6t-stream-readbacks.patch'
+  '0007-media-qcom-camss-add-oneplus6t-runtime-state-dumps.patch'
+  '0008-media-qcom-camss-log-oneplus6t-csiphy-state.patch'
+)
+sha256sums=('be96947a606d3dc7162c7febf63748ac969c7a6bc9622b28e83a292295c6803f'
+            'da0d27dda55922a7b3332ebefaeb175f7e110ffba037ff8f0027b2558efeb354'
+            'd7749aa9e4903a84ee1e7ab20b5728eb8daa61376b1ccf4d01d10b3a00ec0017'
+            'dbcbebc4b33a5dd194a692c353760642d096fc976030f1da639d57d593a8229a'
+            '78fcac0a1f69cba53641998cb19dd3b79c97e1668aad3db28e7cd4e475300c76'
+            'b5d2018508f93f260244b3c1e629b33c059ff25304411508f9a0fb4dd273c5b8'
+            'b217a42a7f11a6ad901eca5d21f6acd2b12d60d1d5a4bab9b7a7efe191d1ea41'
+            '11041d84725b55106aad53726b686b37dd7ce29885e38dfec45c06824deedb40'
+            '1ad9202133ba628d23ce0591c624c58ee907f6a6a5b5a5ba63ff916fb714a266'
+            'b9e3e39784e2571ba05dd9b3592808fe1ee39e1a446ab089886bf00865807df3'
+            'dfb4ba89cbc85d68e02c46f6d549125542b4d53f6e1edc78bee1c6bf6018223b'
+            'c1c582f6619b7aa7c1bd64ce3a3d542cb4218fc629146ca02b410311bbac2106')
+
+_kernel_make_args() {
+  local -n _out="$1"
+  _out=(ARCH=arm64)
+
+  if [[ "${ONEPLUS6T_CAMERA_HOST_LLVM:-0}" == "1" ]]; then
+    _out+=(LLVM=1 LLVM_IAS=1)
+  fi
+}
+
+_merge_oneplus6t_config() {
+  local -n _make_args="$1"
+
+  scripts/kconfig/merge_config.sh -m .config \
+    "${srcdir}/camera.config" \
+    "${srcdir}/hibernate.config"
+  make "${_make_args[@]}" olddefconfig
+}
+
+prepare() {
+  cd "${_srcdir}"
+  local make_args
+  _kernel_make_args make_args
+
+  patch -Np1 -i "${srcdir}/0001-media-qcom-camss-set-csid-cphy-bit.patch"
+  patch -Np1 -i "${srcdir}/0002-media-qcom-camss-bound-sdm845-cphy-lane-table.patch"
+  patch -Np1 -i "${srcdir}/0003-media-qcom-camss-add-oneplus6t-imx519-diagnostics.patch"
+  patch -Np1 -i "${srcdir}/0004-media-qcom-camss-add-oneplus6t-cphy-lab-overrides.patch"
+  patch -Np1 -i "${srcdir}/0005-media-i2c-imx519-add-oneplus6t-stream-readbacks.patch"
+  patch -Np1 -i "${srcdir}/0007-media-qcom-camss-add-oneplus6t-runtime-state-dumps.patch"
+  patch -Np1 -i "${srcdir}/0008-media-qcom-camss-log-oneplus6t-csiphy-state.patch"
+  cp "${srcdir}/${_config}" .config
+  _merge_oneplus6t_config make_args
+}
+
+build() {
+  cd "${_srcdir}"
+  local make_args
+  _kernel_make_args make_args
+  _merge_oneplus6t_config make_args
+
+  make \
+    "${make_args[@]}" \
+    KBUILD_BUILD_USER=linuxphone \
+    KBUILD_BUILD_HOST=reproducible \
+    KBUILD_BUILD_TIMESTAMP="@${SOURCE_DATE_EPOCH:-0}" \
+    KBUILD_BUILD_VERSION="${pkgrel}-oneplus6t-camera" \
+    -j"${MAKEFLAGS_NPROC:-$(nproc)}"
+}
+
+package() {
+  cd "${_srcdir}"
+
+  local kernelrelease
+  local make_args
+  _kernel_make_args make_args
+  kernelrelease="$(make -s "${make_args[@]}" kernelrelease)"
+
+  if [[ -f arch/arm64/boot/vmlinuz ]]; then
+    install -Dm644 arch/arm64/boot/vmlinuz \
+      "${pkgdir}/boot/vmlinuz-oneplus6t-camera"
+  elif [[ -f arch/arm64/boot/Image.gz ]]; then
+    install -Dm644 arch/arm64/boot/Image.gz \
+      "${pkgdir}/boot/vmlinuz-oneplus6t-camera"
+  elif [[ -f arch/arm64/boot/Image ]]; then
+    install -d "${pkgdir}/boot"
+    gzip -n -9 -c arch/arm64/boot/Image > \
+      "${pkgdir}/boot/vmlinuz-oneplus6t-camera"
+    chmod 0644 "${pkgdir}/boot/vmlinuz-oneplus6t-camera"
+  else
+    echo "No usable arm64 kernel image was produced." >&2
+    find arch/arm64/boot -maxdepth 1 -type f -printf '%f\n' >&2
+    return 1
+  fi
+  install -Dm644 arch/arm64/boot/dts/qcom/sdm845-oneplus-fajita.dtb \
+    "${pkgdir}/boot/dtbs/qcom/sdm845-oneplus-fajita.dtb"
+
+  make \
+    "${make_args[@]}" \
+    INSTALL_MOD_PATH="${pkgdir}/usr" \
+    INSTALL_MOD_STRIP=1 \
+    modules_install
+
+  rm -f \
+    "${pkgdir}/usr/lib/modules/${kernelrelease}/build" \
+    "${pkgdir}/usr/lib/modules/${kernelrelease}/source"
+
+  install -Dm644 include/config/kernel.release \
+    "${pkgdir}/usr/share/linux-oneplus6t-camera/kernel.release"
+  install -Dm644 "${srcdir}/camera.config" \
+    "${pkgdir}/usr/share/linux-oneplus6t-camera/camera.config"
+  install -Dm644 "${srcdir}/hibernate.config" \
+    "${pkgdir}/usr/share/linux-oneplus6t-camera/hibernate.config"
+  install -Dm644 "${srcdir}/camera-series.tsv" \
+    "${pkgdir}/usr/share/linux-oneplus6t-camera/camera-series.tsv"
+  printf '%s\n' "${_commit}" > \
+    "${pkgdir}/usr/share/linux-oneplus6t-camera/source-commit"
+}

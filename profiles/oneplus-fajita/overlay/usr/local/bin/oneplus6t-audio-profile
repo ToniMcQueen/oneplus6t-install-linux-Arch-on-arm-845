@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+for _ in $(seq 1 20); do
+  if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
+    if [[ -x /usr/local/bin/oneplus6t-audio-route ]]; then
+      /usr/local/bin/oneplus6t-audio-route loudspeaker >/dev/null 2>&1 || true
+    elif pactl set-card-profile alsa_card.platform-sound HiFi >/dev/null 2>&1; then
+      pactl list short sinks 2>/dev/null \
+        | awk '$2 ~ /Speaker/ { print $2; exit }' \
+        | while read -r speaker_sink; do
+            pactl set-default-sink "$speaker_sink" >/dev/null 2>&1 || true
+          done
+    fi
+    exit 0
+  fi
+  sleep 1
+done
+
+exit 0

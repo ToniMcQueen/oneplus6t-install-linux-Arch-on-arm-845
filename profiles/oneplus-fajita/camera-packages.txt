@@ -1,0 +1,5 @@
+# Camera userspace stays independent from the kernel package so either side can
+# be updated and tested without hiding ABI or device-tree changes.
+libcamera
+libcamera-tools
+v4l-utils

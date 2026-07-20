@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+[[ -d "$runtime_dir" ]] || runtime_dir=/tmp
+export XDG_RUNTIME_DIR="$runtime_dir"
+
+log_file="${ONEPLUS6T_SCREENSHOT_LOG:-/tmp/oneplus6t-screenshot.log}"
+
+log() {
+  printf '%s %s\n' "$(date -Is 2>/dev/null || date)" "$*" >> "$log_file"
+}
+
+if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+  for socket in "$runtime_dir"/wayland-*; do
+    [[ -S "$socket" ]] || continue
+    export WAYLAND_DISPLAY="${socket##*/}"
+    break
+  done
+fi
+
+if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+  for instance in "$runtime_dir"/hypr/*; do
+    [[ -S "$instance/.socket.sock" ]] || continue
+    export HYPRLAND_INSTANCE_SIGNATURE="${instance##*/}"
+  done
+fi
+
+notify() {
+  command -v hyprctl >/dev/null 2>&1 || return 0
+  hyprctl notify -1 3000 "$1" "$2" >/dev/null 2>&1 || true
+}
+
+if ! command -v grim >/dev/null 2>&1; then
+  notify "rgb(ff5555)" "grim is not installed."
+  log "grim missing"
+  exit 1
+fi
+
+picture_root="${XDG_PICTURES_DIR:-${HOME:-/home/alarm}/Pictures}"
+out_dir="$picture_root/Screenshots"
+mkdir -p "$out_dir"
+
+stamp="$(date +%Y%m%d-%H%M%S)"
+out_file="$out_dir/oneplus6t-$stamp.png"
+if [[ -e "$out_file" ]]; then
+  out_file="$out_dir/oneplus6t-$stamp-$$.png"
+fi
+tmp_file="$out_dir/.${out_file##*/}.tmp"
+output_name="${ONEPLUS6T_SCREENSHOT_OUTPUT:-DSI-1}"
+
+log "capture start output=$output_name runtime=$XDG_RUNTIME_DIR wayland=${WAYLAND_DISPLAY:-unset} hypr=${HYPRLAND_INSTANCE_SIGNATURE:-unset}"
+
+if ! grim -o "$output_name" "$tmp_file" 2>> "$log_file"; then
+  log "grim output capture failed; retrying full compositor capture"
+  grim "$tmp_file" 2>> "$log_file"
+fi
+
+if [[ ! -s "$tmp_file" ]]; then
+  rm -f "$tmp_file"
+  notify "rgb(ff5555)" "Screenshot failed: empty output."
+  log "capture failed: empty output"
+  exit 1
+fi
+
+mv "$tmp_file" "$out_file"
+ln -sfn "${out_file##*/}" "$out_dir/latest.png"
+notify "rgb(88ff88)" "Screenshot saved: $out_file"
+log "capture ok file=$out_file"

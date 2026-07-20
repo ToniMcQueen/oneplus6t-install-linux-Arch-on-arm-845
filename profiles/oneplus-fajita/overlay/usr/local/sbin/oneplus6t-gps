@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODEM_INDEX="${ONEPLUS6T_MODEM_INDEX:-0}"
+QMI_TARGET="${ONEPLUS6T_QMI_TARGET:-}"
+
+log() {
+  printf 'oneplus6t-gps: %s\n' "$*" >&2
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: oneplus6t-gps COMMAND
+
+Commands:
+  status       read ModemManager and QMI GNSS status
+  unlock       set Qualcomm LOC engine lock to none
+  enable       enable ModemManager 3GPP, GPS NMEA, and raw GPS location
+  get          read current ModemManager location
+  fix [secs]   enable GPS and poll for a fix for up to secs, default 90
+  disable      disable ModemManager GPS NMEA and raw GPS location
+EOF
+}
+
+qmicli_cmd() {
+  if command -v qmicli >/dev/null 2>&1; then
+    printf '%s\n' qmicli
+  elif command -v pmos-qmicli >/dev/null 2>&1; then
+    printf '%s\n' pmos-qmicli
+  elif [[ -x /opt/pmos-compat/bin/qmicli ]]; then
+    printf '%s\n' /opt/pmos-compat/bin/qmicli
+  fi
+}
+
+qmi_target_args() {
+  if [[ -n "$QMI_TARGET" ]]; then
+    printf '%s\n' "$QMI_TARGET"
+  elif [[ -e /dev/modem ]]; then
+    printf '%s\n' "-d /dev/modem --device-open-qmi"
+  elif [[ -e /dev/wwan0qmi0 ]]; then
+    printf '%s\n' "-d /dev/wwan0qmi0 --device-open-qmi"
+  else
+    printf '%s\n' "-pd qrtr://0"
+  fi
+}
+
+run_qmi() {
+  local cmd target
+  cmd="$(qmicli_cmd || true)"
+  if [[ -z "$cmd" ]]; then
+    log "qmicli is not installed"
+    return 127
+  fi
+
+  target="$(qmi_target_args)"
+  # shellcheck disable=SC2086
+  $cmd $target "$@"
+}
+
+modem_ready() {
+  mmcli -m "$MODEM_INDEX" >/dev/null 2>&1
+}
+
+status() {
+  echo "== ModemManager location status =="
+  if modem_ready; then
+    mmcli -m "$MODEM_INDEX" --location-status || true
+    echo
+    mmcli -m "$MODEM_INDEX" --location-get || true
+  else
+    log "ModemManager modem $MODEM_INDEX is not ready"
+  fi
+
+  echo
+  echo "== Qualcomm LOC status =="
+  run_qmi --loc-get-engine-lock || true
+  run_qmi --loc-get-operation-mode || true
+  run_qmi --loc-get-nmea-types || true
+}
+
+unlock() {
+  run_qmi --loc-set-engine-lock=none
+}
+
+enable() {
+  mmcli -m "$MODEM_INDEX" --location-enable-3gpp || true
+  mmcli -m "$MODEM_INDEX" --location-enable-gps-nmea
+  mmcli -m "$MODEM_INDEX" --location-enable-gps-raw
+  mmcli -m "$MODEM_INDEX" --location-set-gps-refresh-rate=5 || true
+}
+
+disable() {
+  mmcli -m "$MODEM_INDEX" --location-disable-gps-nmea || true
+  mmcli -m "$MODEM_INDEX" --location-disable-gps-raw || true
+}
+
+get_location() {
+  mmcli -m "$MODEM_INDEX" --location-get
+}
+
+fix() {
+  local seconds="${1:-90}"
+  local deadline now
+
+  unlock || true
+  enable
+
+  deadline=$((SECONDS + seconds))
+  while (( SECONDS <= deadline )); do
+    now="$(date --iso-8601=seconds)"
+    printf '\n== %s ==\n' "$now"
+    get_location || true
+    sleep 5
+  done
+}
+
+case "${1:-status}" in
+  status)
+    status
+    ;;
+  unlock)
+    unlock
+    ;;
+  enable)
+    enable
+    ;;
+  get)
+    get_location
+    ;;
+  fix)
+    shift
+    fix "${1:-90}"
+    ;;
+  disable)
+    disable
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

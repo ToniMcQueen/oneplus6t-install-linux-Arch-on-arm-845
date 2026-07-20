@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -u
+
+timeout_seconds="${ONEPLUS6T_FASTRPC_WAIT_SECONDS:-25}"
+
+log() {
+  printf 'oneplus6t-wait-fastrpc-sdsp: %s\n' "$*" >&2
+}
+
+for second in $(seq 1 "$timeout_seconds"); do
+  if [[ -e /dev/fastrpc-sdsp ]]; then
+    log "found /dev/fastrpc-sdsp after ${second}s"
+    exit 0
+  fi
+  sleep 1
+done
+
+log "timed out waiting for /dev/fastrpc-sdsp"
+exit 1

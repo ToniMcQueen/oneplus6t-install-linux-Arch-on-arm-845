@@ -1,0 +1,396 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LOG_ROOT="${ONEPLUS6T_SENSOR_LOG_ROOT:-/root/oneplus6t-sensor-debug}"
+FW_DIR="${ONEPLUS6T_SENSOR_FW_DIR:-/usr/share/qcom/sdm845/OnePlus/oneplus6}"
+RUN_SECONDS="${ONEPLUS6T_SENSOR_RUN_SECONDS:-45}"
+SSC_TIMEOUT="${ONEPLUS6T_SENSOR_SSC_TIMEOUT:-8}"
+RISK_ACK="${ONEPLUS6T_SENSOR_LAB_I_UNDERSTAND_CRASHDUMP:-0}"
+
+SENSOR_UNITS=(
+  hexagonrpcd-sdsp.service
+  hexagonrpcd-adsp-rootpd.service
+  hexagonrpcd-adsp-sensorspd.service
+  iio-sensor-proxy.service
+)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  oneplus6t-sensor-lab status
+  oneplus6t-sensor-lab baseline
+  oneplus6t-sensor-lab disable
+  oneplus6t-sensor-lab enable-pmos-boot [--i-understand-crashdump-risk]
+  oneplus6t-sensor-lab run-sensorproxy [--i-understand-crashdump-risk]
+  oneplus6t-sensor-lab run-sdsp [--i-understand-crashdump-risk]
+
+Default state is safe: Hexagon sensor units stay masked.
+
+PMOS-style path:
+  enable-pmos-boot   enable early hexagonrpcd-sdsp plus delayed SensorProxy
+  run-sensorproxy    bounded SensorProxy capture, no raw ssccli probes
+
+Raw SSC path:
+  run-sdsp           bounded manual stack plus ssccli sweep; highest risk
+EOF
+}
+
+log() {
+  printf 'oneplus6t-sensor-lab: %s\n' "$*" >&2
+}
+
+need_root() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    log "run as root"
+    exit 1
+  fi
+}
+
+stamp() {
+  date -u +%Y%m%dT%H%M%SZ
+}
+
+run_dir() {
+  local action="$1"
+  local dir="$LOG_ROOT/$(stamp)-$action"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
+}
+
+run_quiet() {
+  "$@" >/dev/null 2>&1 || true
+}
+
+mask_units() {
+  run_quiet timeout -k 2s 10s systemctl stop "${SENSOR_UNITS[@]}"
+  systemctl mask "${SENSOR_UNITS[@]}" >/dev/null 2>&1 || true
+  systemctl reset-failed "${SENSOR_UNITS[@]}" >/dev/null 2>&1 || true
+}
+
+enable_pmos_boot_units() {
+  systemctl unmask hexagonrpcd-sdsp.service iio-sensor-proxy.service >/dev/null 2>&1 || true
+  systemctl mask hexagonrpcd-adsp-rootpd.service hexagonrpcd-adsp-sensorspd.service >/dev/null 2>&1 || true
+  systemctl enable hexagonrpcd-sdsp.service >/dev/null
+  systemctl enable iio-sensor-proxy.service >/dev/null
+}
+
+kill_lab_processes() {
+  pkill -f '/usr/bin/hexagonrpcd -f /dev/fastrpc-sdsp -d sdsp' >/dev/null 2>&1 || true
+  pkill -f '/usr/lib/iio-sensor-proxy' >/dev/null 2>&1 || true
+}
+
+status_report() {
+  printf '=== identity ===\n'
+  date -u || true
+  printf 'root: '
+  findmnt -n -o SOURCE,FSTYPE / || true
+  printf 'kernel: '
+  uname -a || true
+
+  printf '\n=== sensor units ===\n'
+  systemctl is-enabled "${SENSOR_UNITS[@]}" 2>&1 || true
+  systemctl is-active "${SENSOR_UNITS[@]}" 2>&1 || true
+
+  printf '\n=== fastrpc devices ===\n'
+  ls -l /dev/fastrpc* 2>&1 || true
+
+  printf '\n=== sensor payload ===\n'
+  printf 'fw dir: %s\n' "$FW_DIR"
+  find "$FW_DIR" -maxdepth 3 -type d -print 2>&1 | sort | sed -n '1,160p' || true
+  printf 'sensor files: '
+  find "$FW_DIR/sensors" -type f 2>/dev/null | wc -l || true
+  printf 'sdsp files: '
+  find "$FW_DIR/dsp/sdsp" -type f 2>/dev/null | wc -l || true
+  ls -l \
+    "$FW_DIR/sensors/sns_reg.conf" \
+    "$FW_DIR/sensors/sensors_list.txt" \
+    "$FW_DIR/dsp/sdsp/fastrpc_shell_2" 2>&1 || true
+
+  printf '\n=== remoteproc ===\n'
+  local f
+  for f in /sys/class/remoteproc/remoteproc*/name \
+           /sys/class/remoteproc/remoteproc*/state \
+           /sys/class/remoteproc/remoteproc*/firmware; do
+    printf '%s: ' "$f"
+    cat "$f" 2>/dev/null || true
+  done
+
+  printf '\n=== support services ===\n'
+  systemctl is-active \
+    pmos-compat-tqftpserv.service \
+    pmos-compat-rmtfs.service \
+    pmos-compat-pd-mapper.service 2>&1 || true
+
+  printf '\n=== SensorProxy D-Bus ===\n'
+  if command -v gdbus >/dev/null 2>&1; then
+    gdbus introspect --system \
+      --dest net.hadess.SensorProxy \
+      --object-path /net/hadess/SensorProxy 2>&1 || true
+    gdbus introspect --system \
+      --dest net.hadess.SensorProxy \
+      --object-path /net/hadess/SensorProxy/Compass 2>&1 || true
+  else
+    printf 'gdbus missing\n'
+  fi
+
+  printf '\n=== SensorProxy udev properties ===\n'
+  if command -v udevadm >/dev/null 2>&1; then
+    for dev in /sys/class/misc/fastrpc-adsp /sys/class/misc/fastrpc-sdsp; do
+      printf '%s\n' "$dev"
+      udevadm info --query=property --path "$dev" 2>&1 \
+        | grep -E '^(IIO_SENSOR_PROXY_TYPE|ACCEL_MOUNT_MATRIX)=' || true
+    done
+  else
+    printf 'udevadm missing\n'
+  fi
+}
+
+baseline() {
+  local dir="$1"
+  mkdir -p "$dir"
+  status_report > "$dir/status.txt" 2>&1
+
+  {
+    printf '=== pstore ===\n'
+    mount | grep pstore || true
+    find /sys/fs/pstore -maxdepth 1 -type f -printf '%f %s bytes\n' 2>/dev/null | sort || true
+
+    printf '\n=== package versions ===\n'
+    pacman -Q linux-firmware-qcom hexagonrpcd iio-sensor-proxy libssc 2>&1 || true
+
+    printf '\n=== firmware hashes ===\n'
+    sha256sum \
+      /usr/lib/firmware/qcom/sdm845/oneplus6/slpi.mbn \
+      /usr/lib/firmware/qcom/sdm845/oneplus6/adsp.mbn \
+      /usr/lib/firmware/qcom/sdm845/oneplus6/cdsp.mbn \
+      "$FW_DIR/dsp/sdsp/fastrpc_shell_2" 2>&1 || true
+
+    printf '\n=== boot journal sensor lines ===\n'
+    journalctl -b --no-pager \
+      | grep -Ei 'slpi|sdsp|ssc|sns|sensor|fastrpc|hexagon|iio|remoteproc|qcom|qrtr|crash|panic|fatal' \
+      | tail -n 320 || true
+  } > "$dir/baseline-extra.txt" 2>&1
+
+  if command -v monitor-sensor >/dev/null 2>&1; then
+    timeout -k 2s 12s monitor-sensor > "$dir/monitor-sensor.txt" 2>&1 || true
+  else
+    printf 'monitor-sensor missing\n' > "$dir/monitor-sensor.txt"
+  fi
+
+  log "baseline saved to $dir"
+}
+
+run_as_fastrpc() {
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u fastrpc -- "$@"
+  elif command -v setpriv >/dev/null 2>&1; then
+    setpriv --reuid=fastrpc --regid=fastrpc --init-groups "$@"
+  else
+    log "runuser/setpriv missing; running as root"
+    "$@"
+  fi
+}
+
+run_ssccli_sweep() {
+  local dir="$1"
+  local sensor
+
+  if ! command -v ssccli >/dev/null 2>&1; then
+    printf 'ssccli not installed\n' > "$dir/ssccli-missing.log"
+    return
+  fi
+
+  for sensor in accelerometer gyroscope light proximity magnetometer compass; do
+    timeout -k 2s "$SSC_TIMEOUT" ssccli --timeout "$SSC_TIMEOUT" --sensor "$sensor" \
+      > "$dir/ssccli-$sensor.log" 2>&1 || true
+  done
+}
+
+need_risk_ack() {
+  local action="$1"
+
+  if [[ "$RISK_ACK" == "1" ]]; then
+    return
+  fi
+
+  cat >&2 <<EOF
+Refusing risky sensor action: $action.
+
+Qualcomm SDSP/SSC sensor experiments have entered crashdump on this device.
+Retry with:
+  ONEPLUS6T_SENSOR_LAB_I_UNDERSTAND_CRASHDUMP=1 oneplus6t-sensor-lab $action
+or pass:
+  --i-understand-crashdump-risk
+EOF
+  exit 2
+}
+
+capture_sensorproxy_state() {
+  local dir="$1"
+
+  if command -v gdbus >/dev/null 2>&1; then
+    gdbus introspect --system \
+      --dest net.hadess.SensorProxy \
+      --object-path /net/hadess/SensorProxy \
+      > "$dir/sensorproxy-root-introspect.txt" 2>&1 || true
+    gdbus introspect --system \
+      --dest net.hadess.SensorProxy \
+      --object-path /net/hadess/SensorProxy/Compass \
+      > "$dir/sensorproxy-compass-introspect.txt" 2>&1 || true
+  else
+    printf 'gdbus missing\n' > "$dir/sensorproxy-root-introspect.txt"
+    printf 'gdbus missing\n' > "$dir/sensorproxy-compass-introspect.txt"
+  fi
+
+  if command -v monitor-sensor >/dev/null 2>&1; then
+    timeout -k 2s "$RUN_SECONDS" monitor-sensor \
+      > "$dir/monitor-sensor-live.txt" 2>&1 || true
+  else
+    printf 'monitor-sensor missing\n' > "$dir/monitor-sensor-live.txt"
+  fi
+}
+
+run_stack_capture() {
+  local action="$1"
+  local include_ssc="${2:-0}"
+  local dir hex_pid="" iio_pid=""
+
+  need_risk_ack "$action"
+
+  dir="$(run_dir "$action")"
+  log "capture directory: $dir"
+  baseline "$dir/pre"
+
+  mask_units
+  kill_lab_processes
+
+  cleanup() {
+    if [[ -n "$iio_pid" ]]; then
+      kill "$iio_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$hex_pid" ]]; then
+      kill "$hex_pid" >/dev/null 2>&1 || true
+    fi
+    kill_lab_processes
+    mask_units
+  }
+
+  trap cleanup EXIT
+
+  run_as_fastrpc /usr/bin/hexagonrpcd \
+    -f /dev/fastrpc-sdsp \
+    -d sdsp \
+    -s \
+    -R "$FW_DIR" \
+    > "$dir/hexagonrpcd-sdsp.log" 2>&1 &
+  hex_pid="$!"
+
+  sleep 10
+
+  if [[ -x /usr/lib/iio-sensor-proxy ]]; then
+    timeout -k 2s "$RUN_SECONDS" env G_MESSAGES_DEBUG=all \
+      /usr/lib/iio-sensor-proxy -v -r \
+      > "$dir/iio-sensor-proxy.log" 2>&1 &
+    iio_pid="$!"
+  else
+    printf '/usr/lib/iio-sensor-proxy not found\n' > "$dir/iio-sensor-proxy.log"
+  fi
+
+  sleep 5
+  capture_sensorproxy_state "$dir"
+  if [[ "$include_ssc" == "1" ]]; then
+    run_ssccli_sweep "$dir"
+  fi
+
+  if [[ -n "$iio_pid" ]]; then
+    wait "$iio_pid" || true
+  else
+    sleep "$RUN_SECONDS"
+  fi
+
+  kill "$hex_pid" >/dev/null 2>&1 || true
+  wait "$hex_pid" >/dev/null 2>&1 || true
+  kill_lab_processes
+  mask_units
+  baseline "$dir/post"
+  trap - EXIT
+
+  log "$action lab capture complete: $dir"
+  log "sensor units are masked again"
+}
+
+run_sensorproxy() {
+  run_stack_capture run-sensorproxy 0
+}
+
+run_sdsp() {
+  run_stack_capture run-sdsp 1
+}
+
+enable_pmos_boot() {
+  need_risk_ack enable-pmos-boot
+  kill_lab_processes
+  enable_pmos_boot_units
+  log "PMOS-style boot sensor path enabled"
+  log "reboot to test: hexagonrpcd-sdsp starts in sysinit, SensorProxy starts after its 10s delay"
+}
+
+main() {
+  local action="${1:-status}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --i-understand-crashdump-risk)
+        RISK_ACK=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        log "unknown argument: $1"
+        usage
+        exit 2
+        ;;
+    esac
+  done
+
+  need_root
+
+  case "$action" in
+    status)
+      status_report
+      ;;
+    baseline)
+      baseline "$(run_dir baseline)"
+      ;;
+    disable|recover)
+      kill_lab_processes
+      mask_units
+      log "sensor services masked and lab processes killed"
+      ;;
+    enable-pmos-boot)
+      enable_pmos_boot
+      ;;
+    run-sensorproxy)
+      run_sensorproxy
+      ;;
+    run-sdsp)
+      run_sdsp
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    *)
+      log "unknown action: $action"
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

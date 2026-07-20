@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="${WVKBD_REPO:-https://github.com/jjsullivan5196/wvkbd.git}"
+ref="${WVKBD_REF:-4fd182a58385b4754756e6dc66860e9ff601b3a1}"
+src="${WVKBD_SOURCE_DIR:-/var/cache/oneplus6t/wvkbd}"
+layout="${WVKBD_LAYOUT:-deskintl}"
+binary="wvkbd-${layout}"
+
+if [[ -x "/usr/local/bin/$binary" ]]; then
+  exit 0
+fi
+
+for tool in git make gcc pkg-config wayland-scanner; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "oneplus6t-install-wvkbd: missing build tool: $tool" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -f "$src/Makefile" ]]; then
+  rm -rf "$src"
+  mkdir -p "$(dirname "$src")"
+  git clone "$repo" "$src"
+fi
+
+if git -C "$src" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! git -C "$src" cat-file -e "${ref}^{commit}" 2>/dev/null; then
+    git -C "$src" fetch --tags --force origin
+  fi
+  git -C "$src" checkout --detach "$ref"
+else
+  cache_ref_file="$src/.oneplus6t-source-ref"
+  if [[ ! -f "$cache_ref_file" ]]; then
+    echo "oneplus6t-install-wvkbd: source cache is not a git checkout and has no ref marker: $cache_ref_file" >&2
+    exit 1
+  fi
+  cache_ref="$(<"$cache_ref_file")"
+  if [[ "$cache_ref" != "$ref" ]]; then
+    echo "oneplus6t-install-wvkbd: source cache ref mismatch: expected $ref, found $cache_ref" >&2
+    exit 1
+  fi
+fi
+
+make -C "$src" clean || true
+make -C "$src" "LAYOUT=$layout" "$binary" -j"$(nproc)"
+install -Dm0755 "$src/$binary" "/usr/local/bin/$binary"

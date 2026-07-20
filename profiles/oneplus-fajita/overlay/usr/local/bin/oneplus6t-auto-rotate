@@ -1,0 +1,368 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEST="net.hadess.SensorProxy"
+OBJ="/net/hadess/SensorProxy"
+IFACE="net.hadess.SensorProxy"
+OUTPUT="${ONEPLUS6T_ROTATE_OUTPUT:-DSI-1}"
+MODE="${ONEPLUS6T_ROTATE_MODE:-1080x2340@60}"
+POSITION="${ONEPLUS6T_ROTATE_POSITION:-0x0}"
+SCALE="${ONEPLUS6T_ROTATE_SCALE:-1}"
+WAIT_SECONDS="${ONEPLUS6T_ROTATE_WAIT_SECONDS:-60}"
+ROTATE_SOURCE="${ONEPLUS6T_ROTATE_SOURCE:-sensorproxy}"
+LOG_FILE="${ONEPLUS6T_ROTATE_LOG:-/tmp/oneplus6t-auto-rotate.log}"
+SENSORPROXY_SETTLE_SECONDS="${ONEPLUS6T_ROTATE_SENSORPROXY_SETTLE_SECONDS:-0.45}"
+SENSORPROXY_COOLDOWN_MS="${ONEPLUS6T_ROTATE_SENSORPROXY_COOLDOWN_MS:-900}"
+
+SSC_TIMEOUT="${ONEPLUS6T_ROTATE_SSC_TIMEOUT:-300}"
+SSC_THRESHOLD="${ONEPLUS6T_ROTATE_SSC_THRESHOLD:-3.2}"
+SSC_MARGIN="${ONEPLUS6T_ROTATE_SSC_MARGIN:-0.6}"
+SSC_FLAT_Z="${ONEPLUS6T_ROTATE_SSC_FLAT_Z:-9.2}"
+SSC_STABLE_SAMPLES="${ONEPLUS6T_ROTATE_SSC_STABLE_SAMPLES:-4}"
+SSC_POS_X="${ONEPLUS6T_ROTATE_SSC_POS_X:-right-up}"
+SSC_NEG_X="${ONEPLUS6T_ROTATE_SSC_NEG_X:-left-up}"
+SSC_POS_Y="${ONEPLUS6T_ROTATE_SSC_POS_Y:-bottom-up}"
+SSC_NEG_Y="${ONEPLUS6T_ROTATE_SSC_NEG_Y:-normal}"
+
+transform_for_orientation() {
+  case "$1" in
+    normal) printf '%s\n' "${ONEPLUS6T_ROTATE_NORMAL:-0}" ;;
+    bottom-up) printf '%s\n' "${ONEPLUS6T_ROTATE_BOTTOM_UP:-2}" ;;
+    left-up) printf '%s\n' "${ONEPLUS6T_ROTATE_LEFT_UP:-1}" ;;
+    right-up) printf '%s\n' "${ONEPLUS6T_ROTATE_RIGHT_UP:-3}" ;;
+    *) return 1 ;;
+  esac
+}
+
+log() {
+  printf 'oneplus6t-auto-rotate: %s\n' "$*" >&2
+  if [[ -n "$LOG_FILE" ]]; then
+    printf 'oneplus6t-auto-rotate: %s\n' "$*" >> "$LOG_FILE" 2>/dev/null || true
+  fi
+}
+
+cleanup() {
+  pkill -P "$$" monitor-sensor >/dev/null 2>&1 || true
+  pkill -P "$$" ssccli >/dev/null 2>&1 || true
+  pkill -P "$$" awk >/dev/null 2>&1 || true
+}
+
+shutdown() {
+  cleanup
+  exit 0
+}
+
+dbus_call() {
+  gdbus call --system --dest "$DEST" --object-path "$OBJ" "$@"
+}
+
+get_property() {
+  local property="$1"
+  dbus_call --method org.freedesktop.DBus.Properties.Get "$IFACE" "$property"
+}
+
+has_accelerometer() {
+  get_property HasAccelerometer 2>/dev/null | grep -q '<true>'
+}
+
+current_orientation() {
+  get_property AccelerometerOrientation \
+    | sed -n "s/.*<'\\([^']*\\)'>.*/\\1/p"
+}
+
+apply_orientation() {
+  local orientation="$1"
+  local transform
+
+  transform="$(transform_for_orientation "$orientation")" || return 0
+  if [[ "${LAST_TRANSFORM:-}" == "$transform" ]]; then
+    return 0
+  fi
+
+  if hyprctl dispatch plugin:rotation:set "$orientation" 2>/dev/null | grep -qx ok; then
+    hyprctl keyword input:touchdevice:transform "$transform" >/dev/null 2>&1 || true
+    LAST_TRANSFORM="$transform"
+    log "$orientation -> plugin transform $transform"
+    return 0
+  fi
+
+  if ! hyprctl keyword monitor "$OUTPUT,$MODE,$POSITION,$SCALE,transform,$transform" >/dev/null; then
+    log "hyprctl failed to set $OUTPUT transform $transform"
+    return 0
+  fi
+  hyprctl keyword input:touchdevice:transform "$transform" >/dev/null 2>&1 || true
+  LAST_TRANSFORM="$transform"
+  log "$orientation -> transform $transform"
+}
+
+now_ms() {
+  date +%s%3N 2>/dev/null || printf '%s000\n' "$(date +%s)"
+}
+
+apply_sensorproxy_orientation() {
+  local orientation="$1"
+  local confirmed now elapsed
+
+  transform_for_orientation "$orientation" >/dev/null || return 0
+
+  if [[ "$SENSORPROXY_SETTLE_SECONDS" != "0" ]]; then
+    sleep "$SENSORPROXY_SETTLE_SECONDS"
+    confirmed="$(current_orientation || true)"
+    if [[ -n "$confirmed" && "$confirmed" != "undefined" && "$confirmed" != "$orientation" ]]; then
+      log "skip $orientation; SensorProxy settled on $confirmed"
+      return 0
+    fi
+  fi
+
+  now="$(now_ms)"
+  if [[ -n "${LAST_SENSORPROXY_APPLY_MS:-}" ]]; then
+    elapsed=$((now - LAST_SENSORPROXY_APPLY_MS))
+    if (( elapsed < SENSORPROXY_COOLDOWN_MS )); then
+      log "skip $orientation; cooldown ${elapsed}ms/${SENSORPROXY_COOLDOWN_MS}ms"
+      return 0
+    fi
+  fi
+
+  apply_orientation "$orientation"
+  LAST_SENSORPROXY_APPLY_MS="$now"
+}
+
+wait_for_accelerometer() {
+  local elapsed=0
+
+  until has_accelerometer; do
+    if (( elapsed >= WAIT_SECONDS )); then
+      log "SensorProxy accelerometer not available after ${WAIT_SECONDS}s"
+      return 1
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}
+
+run_once() {
+  apply_orientation "$(current_orientation || true)"
+}
+
+orientation_from_monitor_line() {
+  local line="$1"
+
+  case "$line" in
+    *"orientation changed:"*)
+      printf '%s\n' "$line" \
+        | sed -n "s/.*orientation changed: \\([^[:space:]]*\\).*/\\1/p"
+      ;;
+    *"orientation:"*)
+      printf '%s\n' "$line" \
+        | sed -n "s/.*orientation: \\([^,)]*\\).*/\\1/p"
+      ;;
+  esac
+}
+
+watch_sensorproxy() {
+  local line orientation
+  local monitor_cmd=(monitor-sensor)
+
+  if ! command -v gdbus >/dev/null 2>&1; then
+    log "gdbus is missing"
+    exit 0
+  fi
+
+  if ! command -v monitor-sensor >/dev/null 2>&1; then
+    log "monitor-sensor is missing"
+    exit 0
+  fi
+
+  if command -v stdbuf >/dev/null 2>&1; then
+    monitor_cmd=(stdbuf -oL -eL monitor-sensor)
+  else
+    log "stdbuf is missing; monitor-sensor events may be delayed by pipe buffering"
+  fi
+
+  while true; do
+    while ! wait_for_accelerometer; do
+      log "SensorProxy is not ready; retrying without leaving the Hyprland session"
+      sleep 5
+    done
+
+    run_once
+
+    "${monitor_cmd[@]}" 2>&1 \
+      | while IFS= read -r line; do
+          orientation="$(orientation_from_monitor_line "$line")"
+          if [[ -n "$orientation" ]]; then
+            apply_sensorproxy_orientation "$orientation"
+          elif [[ "$line" == *WARNING* || "$line" == *ERROR* || "$line" == *Denied* || "$line" == *"Not Authorized"* ]]; then
+            log "$line"
+          fi
+        done || true
+    log "monitor-sensor exited; retrying"
+    sleep 2
+  done
+}
+
+watch_ssc() {
+  local ssc_cmd=(ssccli --timeout "$SSC_TIMEOUT" --sensor accelerometer)
+  local normal_transform bottom_up_transform left_up_transform right_up_transform
+
+  normal_transform="$(transform_for_orientation normal)"
+  bottom_up_transform="$(transform_for_orientation bottom-up)"
+  left_up_transform="$(transform_for_orientation left-up)"
+  right_up_transform="$(transform_for_orientation right-up)"
+
+  if ! command -v ssccli >/dev/null 2>&1; then
+    log "ssccli is missing; falling back to SensorProxy orientation events"
+    watch_sensorproxy
+    return
+  fi
+
+  if command -v stdbuf >/dev/null 2>&1; then
+    ssc_cmd=(stdbuf -oL -eL "${ssc_cmd[@]}")
+  else
+    log "stdbuf is missing; ssccli events may be delayed by pipe buffering"
+  fi
+
+  while true; do
+    "${ssc_cmd[@]}" 2>&1 \
+      | awk \
+          -v threshold="$SSC_THRESHOLD" \
+          -v margin="$SSC_MARGIN" \
+          -v flat_z="$SSC_FLAT_Z" \
+          -v stable_samples="$SSC_STABLE_SAMPLES" \
+          -v pos_x="$SSC_POS_X" \
+          -v neg_x="$SSC_NEG_X" \
+          -v pos_y="$SSC_POS_Y" \
+          -v neg_y="$SSC_NEG_Y" \
+          -v output="$OUTPUT" \
+          -v mode="$MODE" \
+          -v position="$POSITION" \
+          -v scale="$SCALE" \
+          -v normal_transform="$normal_transform" \
+          -v bottom_up_transform="$bottom_up_transform" \
+          -v left_up_transform="$left_up_transform" \
+          -v right_up_transform="$right_up_transform" \
+          -v log_file="$LOG_FILE" '
+            function abs(v) { return v < 0 ? -v : v }
+            function reset_candidate() { candidate = ""; candidate_count = 0 }
+            function log_msg(message) {
+              print "oneplus6t-auto-rotate: " message > "/dev/stderr"
+              fflush("/dev/stderr")
+              if (log_file != "") {
+                print "oneplus6t-auto-rotate: " message >> log_file
+                fflush(log_file)
+              }
+            }
+            function transform_for(orientation) {
+              if (orientation == "normal") return normal_transform
+              if (orientation == "bottom-up") return bottom_up_transform
+              if (orientation == "left-up") return left_up_transform
+              if (orientation == "right-up") return right_up_transform
+              return ""
+            }
+            function apply_orientation(orientation, transform, cmd, status) {
+              transform = transform_for(orientation)
+              if (transform == "" || transform == last_transform) {
+                return
+              }
+
+              cmd = "hyprctl dispatch plugin:rotation:set " orientation " 2>/dev/null | grep -qx ok"
+              status = system(cmd)
+              if (status == 0) {
+                system("hyprctl keyword input:touchdevice:transform " transform " >/dev/null 2>&1")
+                last_transform = transform
+                log_msg(orientation " -> plugin transform " transform)
+                return
+              }
+
+              cmd = "hyprctl keyword monitor " output "," mode "," position "," scale ",transform," transform " >/dev/null 2>&1"
+              status = system(cmd)
+              if (status != 0) {
+                log_msg("hyprctl failed to set " output " transform " transform)
+                return
+              }
+              system("hyprctl keyword input:touchdevice:transform " transform " >/dev/null 2>&1")
+              last_transform = transform
+              log_msg(orientation " -> transform " transform)
+            }
+            function maybe_emit(orientation) {
+              if (orientation == "") {
+                reset_candidate()
+                return
+              }
+              if (orientation == candidate) {
+                candidate_count++
+              } else {
+                candidate = orientation
+                candidate_count = 1
+              }
+              if (candidate_count >= stable_samples) {
+                apply_orientation(orientation)
+              }
+            }
+            /Accelerometer sensor measurement:/ {
+              line = $0
+              sub(/^.*X=/, "", line)
+              split(line, xy, / Y=/)
+              x = xy[1] + 0
+              split(xy[2], yz, / Z=/)
+              y = yz[1] + 0
+              split(yz[2], zw, / /)
+              z = zw[1] + 0
+
+              ax = abs(x)
+              ay = abs(y)
+              az = abs(z)
+
+              if (az >= flat_z && az > ax + margin && az > ay + margin) {
+                next
+              }
+
+              if (ax >= threshold && ax > ay + margin) {
+                maybe_emit(x >= 0 ? pos_x : neg_x)
+              } else if (ay >= threshold && ay > ax + margin) {
+                maybe_emit(y >= 0 ? pos_y : neg_y)
+              } else {
+                reset_candidate()
+              }
+            }
+            /WARNING|ERROR/ {
+              log_msg($0)
+            }
+          ' || true
+    log "ssccli accelerometer stream exited; retrying"
+    sleep 2
+  done
+}
+
+if ! command -v hyprctl >/dev/null 2>&1; then
+  log "hyprctl is missing"
+  exit 0
+fi
+
+trap cleanup EXIT
+trap shutdown TERM INT
+
+case "${1:-watch}" in
+  once) run_once ;;
+  watch)
+    case "$ROTATE_SOURCE" in
+      ssc) watch_ssc ;;
+      sensorproxy) watch_sensorproxy ;;
+      auto)
+        if command -v ssccli >/dev/null 2>&1; then
+          watch_ssc
+        else
+          watch_sensorproxy
+        fi
+        ;;
+      *)
+        log "unknown ONEPLUS6T_ROTATE_SOURCE=$ROTATE_SOURCE"
+        exit 2
+        ;;
+    esac
+    ;;
+  *)
+    printf 'Usage: %s [watch|once]\n' "$0" >&2
+    exit 2
+    ;;
+esac

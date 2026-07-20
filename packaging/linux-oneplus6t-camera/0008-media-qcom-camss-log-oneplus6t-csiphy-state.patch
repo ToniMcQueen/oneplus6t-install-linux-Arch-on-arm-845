@@ -1,0 +1,115 @@
+From: LinuxPhone project <linuxphone@localhost>
+Subject: [PATCH] media: qcom: camss: log OnePlus 6T CSIPHY state
+
+The OnePlus 6T IMX519 path reaches stream-on but still produces no RDI
+frames. The next diagnostic gap is whether the SDM845 C-PHY block is clocked
+and programmed as expected at stream enable time.
+
+Add read-only CSIPHY clock, common-control, status, and per-lane register logs
+around lane enable/disable. This does not change receiver programming.
+---
+ drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c | 56 ++++++++++++++++
+ 1 file changed, 56 insertions(+)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c b/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
+--- a/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
++++ b/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
+@@ -8,6 +8,7 @@
+ 
+ #include "camss.h"
+ #include "camss-csiphy.h"
+ 
++#include <linux/clk.h>
+ #include <linux/delay.h>
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
+@@ -646,6 +647,54 @@ static bool csiphy_is_gen2(u32 version)
+ 	return ret;
+ }
+ 
++static void csiphy_oneplus6t_log_clock_state(struct csiphy_device *csiphy,
++					     const char *stage)
++{
++	int i;
++
++	for (i = 0; i < csiphy->nclocks; i++) {
++		struct camss_clock *clock = &csiphy->clock[i];
++		unsigned long rate = clock->clk ? clk_get_rate(clock->clk) : 0;
++		int rate_set = csiphy->rate_set ? csiphy->rate_set[i] : -1;
++
++		dev_info(csiphy->camss->dev,
++			 "oneplus6t-camss: csiphy%u clk %s %s rate=%lu rate_set=%d\n",
++			 csiphy->id, stage, clock->name ? clock->name : "?",
++			 rate, rate_set);
++	}
++}
++
++static void csiphy_oneplus6t_dump_state(struct csiphy_device *csiphy,
++					const char *stage)
++{
++	u32 ctrl0 = readl_relaxed(csiphy->base +
++				  CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(0));
++	u32 ctrl5 = readl_relaxed(csiphy->base +
++				  CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(5));
++	u32 ctrl6 = readl_relaxed(csiphy->base +
++				  CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(6));
++	u32 ctrl7 = readl_relaxed(csiphy->base +
++				  CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(7));
++	u32 status0 = readl_relaxed(csiphy->base +
++				    CSIPHY_3PH_CMN_CSI_COMMON_STATUSn(0));
++	u32 status1 = readl_relaxed(csiphy->base +
++				    CSIPHY_3PH_CMN_CSI_COMMON_STATUSn(1));
++	int i;
++
++	dev_info(csiphy->camss->dev,
++		 "oneplus6t-camss: csiphy%u state %s ctrl0=0x%08x ctrl5=0x%08x ctrl6=0x%08x ctrl7=0x%08x status0=0x%08x status1=0x%08x\n",
++		 csiphy->id, stage, ctrl0, ctrl5, ctrl6, ctrl7, status0,
++		 status1);
++
++	for (i = 0; i < 3; i++)
++		dev_info(csiphy->camss->dev,
++			 "oneplus6t-camss: csiphy%u state %s lane%d cfg1=0x%08x cfg2=0x%08x cfg3=0x%08x cfg4=0x%08x cfg5=0x%08x cfg8=0x%08x cfg9=0x%08x ctrl15=0x%08x\n",
++			 csiphy->id, stage, i,
++			 readl_relaxed(csiphy->base + CSIPHY_3PH_LNn_CFG1(i)),
++			 readl_relaxed(csiphy->base + CSIPHY_3PH_LNn_CFG2(i)),
++			 readl_relaxed(csiphy->base + CSIPHY_3PH_LNn_CFG3(i)),
++			 readl_relaxed(csiphy->base + CSIPHY_3PH_LNn_CFG4(i)),
++			 readl_relaxed(csiphy->base + CSIPHY_3PH_LNn_CFG5(i)),
++			 readl_relaxed(csiphy->base + CSIPHY_3PH_LNn_CFG8(i)),
++			 readl_relaxed(csiphy->base + CSIPHY_3PH_LNn_CFG9(i)),
++			 readl_relaxed(csiphy->base + CSIPHY_3PH_LNn_CSI_LANE_CTRL15(i)));
++}
++
+ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
+ 				struct csiphy_config *cfg,
+ 				s64 link_freq, u8 lane_mask)
+@@ -666,6 +715,9 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
+ 		settle_cnt = camss_oneplus6t_cphy_settle & 0xff;
+ 	}
+ 
++	csiphy_oneplus6t_log_clock_state(csiphy, "before-enable");
++	csiphy_oneplus6t_dump_state(csiphy, "before-enable");
++
+ 	dev_info(csiphy->camss->dev,
+ 		 "oneplus6t-camss: csiphy%u lanes enable cphy=%u num_data=%u data=%u,%u,%u,%u link=%lld timer=%u settle=%u mask=0x%02x\n",
+ 		 csiphy->id, c->cphy, c->num_data,
+@@ -704,6 +756,8 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
+ 	/* IRQ_MASK registers - disable all interrupts */
+ 	for (i = 11; i < 22; i++)
+ 		writel_relaxed(0, csiphy->base + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(i));
++
++	csiphy_oneplus6t_dump_state(csiphy, "after-enable");
+ }
+ 
+ static void csiphy_lanes_disable(struct csiphy_device *csiphy,
+@@ -718,6 +772,8 @@ static void csiphy_lanes_disable(struct csiphy_device *csiphy,
+ 
+ 	writel_relaxed(0, csiphy->base +
+ 			  CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(6));
++
++	csiphy_oneplus6t_dump_state(csiphy, "after-disable");
+ }
+ 
+ const struct csiphy_hw_ops csiphy_ops_3ph_1_0 = {
+-- 
+2.50.1

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -u
+
+ENABLE_WIFI_REMOTEPROC="${ONEPLUS6T_ENABLE_WIFI_REMOTEPROC:-0}"
+RMTFS_SERVICE="${ONEPLUS6T_RMTFS_SERVICE:-pmos-compat-rmtfs.service}"
+MODEM_WAIT_SECONDS="${ONEPLUS6T_MODEM_WAIT_SECONDS:-20}"
+
+log() {
+  printf 'oneplus6t-load-qcom-radio: %s\n' "$*" >&2
+}
+
+module_loaded() {
+  local module="$1"
+  lsmod | awk -v "module=$module" '$1 == module { found = 1 } END { exit !found }'
+}
+
+load_module() {
+  local module="$1"
+
+  if module_loaded "$module"; then
+    log "$module already loaded"
+    return 0
+  fi
+
+  if modprobe "$module"; then
+    log "loaded $module"
+    return 0
+  fi
+
+  log "failed to load $module"
+  return 1
+}
+
+remoteproc_state() {
+  local name_file state_file
+
+  for name_file in /sys/class/remoteproc/remoteproc*/name; do
+    [[ -e "$name_file" ]] || continue
+    if [[ "$(cat "$name_file" 2>/dev/null)" == "4080000.remoteproc" ]]; then
+      state_file="${name_file%/name}/state"
+      cat "$state_file" 2>/dev/null || true
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+wait_for_modem_running() {
+  local second state
+
+  for second in $(seq 1 "$MODEM_WAIT_SECONDS"); do
+    state="$(remoteproc_state || true)"
+    if [[ "$state" == "running" ]]; then
+      log "modem remoteproc is running after ${second}s"
+      return 0
+    fi
+    sleep 1
+  done
+
+  log "modem remoteproc did not reach running state"
+  return 1
+}
+
+load_module qcom_q6v5_mss || exit 1
+sleep 2
+
+systemctl reset-failed "$RMTFS_SERVICE" >/dev/null 2>&1 || true
+systemctl restart "$RMTFS_SERVICE" || exit 1
+wait_for_modem_running || exit 1
+
+if [[ "$ENABLE_WIFI_REMOTEPROC" == "1" ]]; then
+  load_module ath10k_snoc || exit 1
+else
+  log "leaving ath10k_snoc disabled; set ONEPLUS6T_ENABLE_WIFI_REMOTEPROC=1 for lab testing"
+fi
+
+exit 0

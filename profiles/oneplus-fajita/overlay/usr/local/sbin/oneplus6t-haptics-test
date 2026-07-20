@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+import argparse
+import fcntl
+import glob
+import os
+import struct
+import sys
+import time
+
+FF_RUMBLE = 0x50
+EV_FF = 0x15
+EVIOCSFF = 0x40304580
+EVIOCRMFF = 0x40044581
+
+
+def haptics_candidates():
+    candidates = []
+    for event in sorted(glob.glob("/sys/class/input/event*")):
+        name_path = os.path.join(event, "device/name")
+        ff_path = os.path.join(event, "device/capabilities/ff")
+        try:
+            name = open(name_path, encoding="utf-8").read().strip()
+        except OSError:
+            name = "unknown"
+        try:
+            ff_bits = open(ff_path, encoding="utf-8").read().strip()
+        except OSError:
+            ff_bits = "0"
+
+        lower_name = name.lower()
+        has_ff = ff_bits not in ("0", "none", "0000000000000000")
+        if "haptic" in lower_name or "vibrator" in lower_name or has_ff:
+            candidates.append(("/dev/input/" + os.path.basename(event), name, ff_bits))
+    return candidates
+
+
+def upload_and_play(device, duration_ms, strength):
+    fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        effect = bytearray(
+            struct.pack("HhHHHHH", FF_RUMBLE, -1, 0, 0, 0, duration_ms, 0)
+            + struct.pack("HH", strength, strength)
+            + bytes(48 - 14 - 4)
+        )
+        fcntl.ioctl(fd, EVIOCSFF, effect, True)
+        effect_id = struct.unpack_from("h", effect, 2)[0]
+        print(f"uploaded rumble effect id={effect_id}; playing {duration_ms}ms")
+        os.write(fd, struct.pack("qqHHi", 0, 0, EV_FF, effect_id, 1))
+        time.sleep((duration_ms + 50) / 1000)
+        os.write(fd, struct.pack("qqHHi", 0, 0, EV_FF, effect_id, 0))
+        try:
+            fcntl.ioctl(fd, EVIOCRMFF, struct.pack("i", effect_id))
+        except OSError:
+            pass
+    finally:
+        os.close(fd)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="OnePlus 6T haptics force-feedback test")
+    parser.add_argument("--probe", action="store_true", help="list haptics candidates only")
+    parser.add_argument("--duration-ms", type=int, default=300)
+    parser.add_argument("--strength", default="0x6000")
+    args = parser.parse_args()
+
+    candidates = haptics_candidates()
+    if not candidates:
+        print("No haptics force-feedback candidate found", file=sys.stderr)
+        return 1
+
+    for device, name, ff_bits in candidates:
+        print(f"{device} name={name} ff={ff_bits}")
+
+    if args.probe:
+        return 0
+
+    strength = int(str(args.strength), 0)
+    strength = max(0, min(strength, 0xFFFF))
+    device, name, ff_bits = candidates[0]
+    print(f"Using {device} name={name} ff={ff_bits}")
+    upload_and_play(device, args.duration_ms, strength)
+    print("ONEPLUS6T_HAPTICS_TEST_DONE")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

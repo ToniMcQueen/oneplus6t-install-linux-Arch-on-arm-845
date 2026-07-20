@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$(id -u)" == "0" ]]; then
+  runtime_dir="${XDG_RUNTIME_DIR:-/run/user/1000}"
+  wayland_display=""
+  hypr_sig="${HYPRLAND_INSTANCE_SIGNATURE:-}"
+  session_bus=""
+
+  for candidate in "$runtime_dir"/wayland-*; do
+    if [[ -S "$candidate" ]]; then
+      wayland_display="${candidate##*/}"
+      break
+    fi
+  done
+  wayland_display="${wayland_display:-wayland-1}"
+
+  hypr_pid="$(pgrep -u alarm -x Hyprland | head -n 1 || true)"
+  if [[ -n "$hypr_pid" && -r "/proc/$hypr_pid/environ" ]]; then
+    session_bus="$(tr '\0' '\n' <"/proc/$hypr_pid/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -n 1)"
+  fi
+  session_bus="${session_bus:-unix:path=$runtime_dir/bus}"
+
+  if [[ -z "$hypr_sig" && -d "$runtime_dir/hypr" ]]; then
+    for candidate in "$runtime_dir"/hypr/*; do
+      if [[ -S "$candidate/.socket.sock" ]]; then
+        hypr_sig="${candidate##*/}"
+        break
+      fi
+    done
+  fi
+
+  exec runuser -u alarm -- env \
+    HOME=/home/alarm \
+    XDG_RUNTIME_DIR="$runtime_dir" \
+    WAYLAND_DISPLAY="$wayland_display" \
+    GDK_BACKEND=wayland \
+    LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}" \
+    DBUS_SESSION_BUS_ADDRESS="$session_bus" \
+    HYPRLAND_INSTANCE_SIGNATURE="$hypr_sig" \
+    /usr/local/bin/oneplus6t-lock "$@"
+fi
+
+export HOME="${HOME:-/home/alarm}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
+export GDK_BACKEND="${GDK_BACKEND:-wayland}"
+export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+
+if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+  for candidate in "$XDG_RUNTIME_DIR"/wayland-*; do
+    if [[ -S "$candidate" ]]; then
+      export WAYLAND_DISPLAY="${candidate##*/}"
+      break
+    fi
+  done
+fi
+
+if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" && -d "$XDG_RUNTIME_DIR/hypr" ]]; then
+  for candidate in "$XDG_RUNTIME_DIR"/hypr/*; do
+    if [[ -S "$candidate/.socket.sock" ]]; then
+      export HYPRLAND_INSTANCE_SIGNATURE="${candidate##*/}"
+      break
+    fi
+  done
+fi
+
+# Safe fallback: do not turn the panel off from the power key until we have a
+# proven touch/power wake path. A dark DPMS panel looked like poweroff during
+# bring-up.
+if command -v hyprctl >/dev/null 2>&1; then
+  hyprctl notify -1 3000 "rgb(55ff99)" "Power key caught; lock screen is not installed." \
+    >/dev/null 2>&1 || true
+fi
+
+exit 0

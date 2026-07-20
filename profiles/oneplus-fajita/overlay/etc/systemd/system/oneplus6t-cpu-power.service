@@ -1,0 +1,13 @@
+[Unit]
+Description=Apply OnePlus 6T CPU power policy
+After=local-fs.target systemd-modules-load.service systemd-udev-trigger.service
+Before=getty@tty1.service oneplus6t-hyperrotation-build.service oneplus6t-wvkbd-build.service
+ConditionPathExistsGlob=/sys/devices/system/cpu/cpufreq/policy*
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/oneplus6t-cpu-power apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

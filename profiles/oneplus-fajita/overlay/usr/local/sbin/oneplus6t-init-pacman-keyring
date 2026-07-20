@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+gpg_dir=/etc/pacman.d/gnupg
+keyring=/usr/share/pacman/keyrings/archlinuxarm.gpg
+state_dir=/var/lib/oneplus6t
+state_file="$state_dir/pacman-keyring-ready"
+
+seed_clock_from_image() {
+  local script_epoch current_year
+
+  current_year="$(date -u +%Y)"
+  if (( current_year >= 2024 )); then
+    return 0
+  fi
+
+  script_epoch="$(stat -c %Y "$0" 2>/dev/null || printf '0')"
+  if (( script_epoch > 1704067200 )); then
+    echo "Seeding system clock from image timestamp before pacman-key work."
+    date -u -s "@$script_epoch"
+    return 0
+  fi
+
+  echo "System clock is too old for pacman-key and no usable image timestamp was found." >&2
+  date -u >&2
+  return 1
+}
+
+reset_keyring() {
+  local backup
+
+  backup="${gpg_dir}.bad-$(date -u +%Y%m%dT%H%M%SZ)"
+  echo "Backing up failed pacman keyring to $backup" >&2
+  rm -rf -- "$backup"
+  mv -- "$gpg_dir" "$backup"
+  install -d -m 0700 -o root -g root "$gpg_dir"
+}
+
+if [[ ! -r "$keyring" ]]; then
+  echo "Missing Arch Linux ARM keyring: $keyring" >&2
+  exit 1
+fi
+
+seed_clock_from_image
+
+install -d -m 0700 -o root -g root "$gpg_dir"
+chown -R root:root "$gpg_dir"
+chmod 0700 "$gpg_dir"
+
+if [[ ! -s "$gpg_dir/pubring.gpg" && ! -s "$gpg_dir/pubring.kbx" ]]; then
+  pacman-key --init
+fi
+
+if ! pacman-key --populate archlinuxarm; then
+  reset_keyring
+  pacman-key --init
+  pacman-key --populate archlinuxarm
+fi
+pacman-key --updatedb
+
+install -d -m 0755 -o root -g root "$state_dir"
+printf 'initialized=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$state_file"
+chmod 0644 "$state_file"
+
+# This is a first-boot bootstrap only. Keep it when initialization fails, but
+# remove the installed phone copy after the completion marker is durable.
+rm -f -- "$0"

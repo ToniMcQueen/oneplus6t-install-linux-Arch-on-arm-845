@@ -1,0 +1,40 @@
+# Research-only package list for compositor-neutral phone/SMS apps.
+#
+# Do not install this manifest into the golden image. Use:
+#   scripts/check-phone-app-candidates.sh oneplus-fajita
+#
+# Existing Linux mobile app candidates. The GTK/libadwaita path is currently
+# used in the image through gnome-calls and chatty in packages.txt. Keep this
+# file for comparing alternatives and future compositor-neutral wrappers.
+plasma-dialer
+spacebar
+gnome-calls
+calls
+chatty
+
+# Qt/Kirigami path candidates
+qt6-base
+qt6-declarative
+qt6-svg
+qt6-wayland
+kirigami
+kirigami-addons
+qqc2-desktop-style
+modemmanager-qt
+kcontacts
+kpeople
+knotifications
+kdbusaddons
+ki18n
+
+# GTK/libadwaita path candidates
+gtk4
+libadwaita
+python-gobject
+gobject-introspection-runtime
+dbus-python
+
+# Core service candidates
+sqlite
+polkit
+dbus-broker

@@ -1,0 +1,15 @@
+[Unit]
+Description=OnePlus 6T ModemManager qmapmux mobile data helper
+After=oneplus6t-uim-select.service ModemManager.service NetworkManager.service
+Wants=oneplus6t-uim-select.service ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=ONEPLUS6T_MOBILE_DATA_BOOT_DELAY=90
+ExecStartPre=/usr/bin/sleep ${ONEPLUS6T_MOBILE_DATA_BOOT_DELAY}
+ExecStart=/usr/local/sbin/oneplus6t-mobile-data service
+ExecStop=/usr/local/sbin/oneplus6t-mobile-data disconnect
+
+[Install]
+WantedBy=multi-user.target

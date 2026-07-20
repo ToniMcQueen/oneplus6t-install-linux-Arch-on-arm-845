@@ -1,0 +1,5 @@
+/src/
+/pkg/
+/firmware.files
+/*.tar.gz
+/*.pkg.tar.*

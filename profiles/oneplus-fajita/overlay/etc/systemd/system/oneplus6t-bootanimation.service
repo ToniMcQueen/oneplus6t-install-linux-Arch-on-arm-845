@@ -1,0 +1,17 @@
+[Unit]
+Description=OnePlus 6T framebuffer boot animation
+After=local-fs.target systemd-vconsole-setup.service
+Before=getty@tty1.service
+ConditionPathExists=/usr/share/oneplus6t/bootanimation.zip
+
+[Service]
+Type=oneshot
+Environment=ONEPLUS6T_BOOTANIMATION_MAX_SECONDS=45
+Environment=ONEPLUS6T_BOOTANIMATION_WAIT_FB=4
+ExecStart=/usr/local/bin/oneplus6t-bootanimation
+StandardOutput=null
+StandardError=journal
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+TimeoutStartSec=55

@@ -1,0 +1,141 @@
+From: LinuxPhone project <linuxphone@localhost>
+Subject: [PATCH] media: qcom: camss: add OnePlus 6T runtime state dumps
+
+The IMX519 main camera path accepts sensor mode writes and enters
+MODE_SELECT streaming, but no frames reach userspace. Previous lab kernels
+showed that simple C-PHY lane assignment, active-lane, settle, and CTRL5
+permutations do not produce frames.
+
+Add read-only CSID and VFE state dumps around stream enable/disable and
+write-master setup. This does not change receiver programming; it records
+the configured RX/RDI/VFE state and any pending IRQ/status bits so the next
+run can separate missing CSI packets from CSID/RDI/VFE routing failures.
+---
+--- a/drivers/media/platform/qcom/camss/camss-csid-gen2.c
++++ b/drivers/media/platform/qcom/camss/camss-csid-gen2.c
+@@ -355,10 +355,44 @@
+ 		 format->decode_format, dt_id, cfg0);
+ }
+ 
++static void csid_oneplus6t_dump_state(struct csid_device *csid,
++				      const char *stage)
++{
++	u32 top, rx, cfg0, cfg1;
++	int i;
++
++	top = readl_relaxed(csid->base + CSID_TOP_IRQ_STATUS);
++	rx = readl_relaxed(csid->base + CSID_CSI2_RX_IRQ_STATUS);
++	cfg0 = readl_relaxed(csid->base + CSID_CSI2_RX_CFG0);
++	cfg1 = readl_relaxed(csid->base + CSID_CSI2_RX_CFG1);
++
++	dev_info(csid->camss->dev,
++		 "oneplus6t-camss: csid%u state %s top=0x%08x rx=0x%08x cfg0=0x%08x cfg1=0x%08x en_vc=0x%x cphy=%u csiphy=%u lanes=%u assign=0x%x\n",
++		 csid->id, stage, top, rx, cfg0, cfg1, csid->phy.en_vc,
++		 csid->phy.cphy, csid->phy.csiphy_id, csid->phy.lane_cnt,
++		 csid->phy.lane_assign);
++
++	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++) {
++		u32 rdi_status = readl_relaxed(csid->base +
++					       CSID_CSI2_RDIN_IRQ_STATUS(i));
++		u32 rdi_cfg0 = readl_relaxed(csid->base + CSID_RDI_CFG0(i));
++		u32 rdi_cfg1 = readl_relaxed(csid->base + CSID_RDI_CFG1(i));
++		u32 rdi_ctrl = readl_relaxed(csid->base + CSID_RDI_CTRL(i));
++
++		dev_info(csid->camss->dev,
++			 "oneplus6t-camss: csid%u state %s rdi%d irq=0x%08x cfg0=0x%08x cfg1=0x%08x ctrl=0x%08x\n",
++			 csid->id, stage, i, rdi_status, rdi_cfg0, rdi_cfg1,
++			 rdi_ctrl);
++	}
++}
++
+ static void csid_configure_stream(struct csid_device *csid, u8 enable)
+ {
+ 	struct csid_testgen_config *tg = &csid->testgen;
+ 	u8 i;
++
++	csid_oneplus6t_dump_state(csid, enable ? "before-enable" : "before-disable");
++
+ 	/* Loop through all enabled VCs and configure stream for each */
+ 	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++)
+ 		if (csid->phy.en_vc & BIT(i)) {
+@@ -369,6 +403,8 @@
+ 			__csid_configure_rx(csid, &csid->phy, i);
+ 			__csid_ctrl_rdi(csid, enable, i);
+ 		}
++
++	csid_oneplus6t_dump_state(csid, enable ? "after-enable" : "after-disable");
+ }
+ 
+ static int csid_configure_testgen_pattern(struct csid_device *csid, s32 val)
+--- a/drivers/media/platform/qcom/camss/camss-vfe-17x.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-17x.c
+@@ -222,6 +222,8 @@
+ 
+ static void vfe_wm_start(struct vfe_device *vfe, u8 wm, struct vfe_line *line)
+ {
++	struct v4l2_pix_format_mplane *pix =
++		&line->video_out.active_fmt.fmt.pix_mp;
+ 	u32 val;
+ 
+ 	/*Set Debug Registers*/
+@@ -261,10 +263,30 @@
+ 	val = 1 << WM_CFG_EN |
+ 	      MODE_MIPI_RAW << WM_CFG_MODE;
+ 	writel_relaxed(val, vfe->base + VFE_BUS_WM_CFG(wm));
++
++	dev_info(vfe->camss->dev,
++		 "oneplus6t-vfe: vfe%u line%u wm%u start %ux%u fourcc=0x%08x stride=%u cfg=0x%08x status0=0x%08x status1=0x%08x irq0=0x%08x irq1=0x%08x\n",
++		 vfe->id, line->id, wm, pix->width, pix->height,
++		 pix->pixelformat, pix->plane_fmt[0].bytesperline, val,
++		 readl_relaxed(vfe->base + VFE_BUS_WM_STATUS0(wm)),
++		 readl_relaxed(vfe->base + VFE_BUS_WM_STATUS1(wm)),
++		 readl_relaxed(vfe->base + VFE_IRQ_STATUS_0),
++		 readl_relaxed(vfe->base + VFE_IRQ_STATUS_1));
+ }
+ 
+ static void vfe_wm_stop(struct vfe_device *vfe, u8 wm)
+ {
++	dev_info(vfe->camss->dev,
++		 "oneplus6t-vfe: vfe%u wm%u stop status0=0x%08x status1=0x%08x bus0=0x%08x bus1=0x%08x bus2=0x%08x wm_status0=0x%08x wm_status1=0x%08x\n",
++		 vfe->id, wm,
++		 readl_relaxed(vfe->base + VFE_IRQ_STATUS_0),
++		 readl_relaxed(vfe->base + VFE_IRQ_STATUS_1),
++		 readl_relaxed(vfe->base + VFE_BUS_IRQ_STATUS(0)),
++		 readl_relaxed(vfe->base + VFE_BUS_IRQ_STATUS(1)),
++		 readl_relaxed(vfe->base + VFE_BUS_IRQ_STATUS(2)),
++		 readl_relaxed(vfe->base + VFE_BUS_WM_STATUS0(wm)),
++		 readl_relaxed(vfe->base + VFE_BUS_WM_STATUS1(wm)));
++
+ 	/* Disable WM */
+ 	writel_relaxed(0, vfe->base + VFE_BUS_WM_CFG(wm));
+ }
+@@ -278,6 +300,11 @@
+ 
+ 	writel_relaxed(addr, vfe->base + VFE_BUS_WM_IMAGE_ADDR(wm));
+ 	writel_relaxed(stride * pix->height, vfe->base + VFE_BUS_WM_FRAME_INC(wm));
++
++	dev_info(vfe->camss->dev,
++		 "oneplus6t-vfe: vfe%u line%u wm%u buffer addr=0x%08x frame_inc=%u stride=%u height=%u\n",
++		 vfe->id, line->id, wm, addr, stride * pix->height, stride,
++		 pix->height);
+ }
+ 
+ static void vfe_reg_update(struct vfe_device *vfe, enum vfe_line_id line_id)
+@@ -358,6 +385,17 @@
+ 		writel_relaxed(vfe_bus_status[i], vfe->base + VFE_BUS_IRQ_CLEAR(i));
+ 	}
+ 
++	if (status0 || status1)
++		dev_info_ratelimited(vfe->camss->dev,
++				     "oneplus6t-vfe: vfe%u irq status0=0x%08x status1=0x%08x\n",
++				     vfe->id, status0, status1);
++
++	for (i = VFE_LINE_RDI0; i < vfe->res->line_num; i++)
++		if (vfe_bus_status[i])
++			dev_info_ratelimited(vfe->camss->dev,
++					     "oneplus6t-vfe: vfe%u irq bus%d=0x%08x\n",
++					     vfe->id, i, vfe_bus_status[i]);
++
+ 	/* Enforce ordering between IRQ reading and interpretation */
+ 	wmb();
+ 

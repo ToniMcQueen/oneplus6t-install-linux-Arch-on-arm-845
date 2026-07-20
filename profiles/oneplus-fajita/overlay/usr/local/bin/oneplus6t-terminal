@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+if command -v foot >/dev/null 2>&1; then
+  /usr/local/bin/oneplus6t-osk show >/dev/null 2>&1 || true
+  exec foot --app-id oneplus6t-terminal
+fi
+
+if command -v hyprctl >/dev/null 2>&1; then
+  hyprctl notify -1 6000 "rgb(ff5555)" "No terminal installed. Add foot to the image."
+fi
+
+exit 1

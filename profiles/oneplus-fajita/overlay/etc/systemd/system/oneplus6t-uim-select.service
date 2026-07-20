@@ -1,0 +1,13 @@
+[Unit]
+Description=Select OnePlus 6T QMI SIM/UIM application
+After=pmos-compat-rmtfs.service pmos-compat-pd-mapper.service oneplus6t-qcom-radio.service
+Wants=pmos-compat-rmtfs.service pmos-compat-pd-mapper.service oneplus6t-qcom-radio.service
+Before=ModemManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/oneplus6t-uim-select
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,40 @@
+# Maintained from the postmarketOS firmware-oneplus-sdm845 sensors subpackage.
+# Reference:
+# https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/community/firmware-oneplus-sdm845/APKBUILD
+
+pkgname=firmware-oneplus-sdm845-sensors
+pkgver=10
+pkgrel=1
+pkgdesc="OnePlus 6/6T SDM845 sensor firmware and registry payload"
+arch=('any')
+url="https://gitlab.com/sdm845-mainline/firmware-oneplus-sdm845"
+license=('custom:proprietary')
+depends=('linux-firmware-qcom')
+options=('!strip' '!debug')
+
+_pmos_pkgname="firmware-oneplus-sdm845"
+_commit="176ca713448c5237a983fb1f158cf3a5c251d775"
+_pmos_device_url="https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/community/firmware-oneplus-sdm845"
+
+source=(
+  "$_pmos_pkgname-$_commit.tar.gz::$url/-/archive/$_commit/$_pmos_pkgname-$_commit.tar.gz"
+  "sensor.files::$_pmos_device_url/sensor.files"
+)
+sha512sums=(
+  '68ecc3cec0458e5c7a0c6e2d1b0da72df324b48e1283e6e0ebc3c1713e8b721386e2554edf48fd559a8b8a40b54f3d4046ba2e484342ff4d5c69baf0839a800e'
+  '09e06851f8cd936aea191e839abca0a37a66444470df446eaaf24cee275a66611400286907565175d4d74627f6232bf2eed88b1d1906ce6416689a5c67e1c980'
+)
+
+package() {
+  local rel
+  cd "$srcdir/$_pmos_pkgname-$_commit"
+
+  while IFS= read -r rel || [[ -n "$rel" ]]; do
+    [[ -z "$rel" ]] && continue
+    rel="${rel#./}"
+    install -Dm644 "$rel" "$pkgdir/$rel"
+  done < "$srcdir/sensor.files"
+
+  ln -sfn oneplus6 "$pkgdir/usr/share/qcom/sdm845/OnePlus/enchilada"
+  ln -sfn oneplus6 "$pkgdir/usr/share/qcom/sdm845/OnePlus/fajita"
+}

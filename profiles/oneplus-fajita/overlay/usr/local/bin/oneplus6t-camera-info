@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -u
+
+section() {
+  printf '\n== %s ==\n' "$*"
+}
+
+run() {
+  printf '$ %s\n' "$*"
+  "$@" 2>&1 || true
+}
+
+section "Kernel"
+run uname -a
+run sh -c "cat /usr/share/linux-oneplus6t-camera/source-commit 2>/dev/null || true"
+run sh -c "cat /usr/share/linux-oneplus6t-camera/kernel.release 2>/dev/null || true"
+run sh -c "lsmod | grep -E '(^camss|imx371|imx376|imx519|videodev|v4l2_)' || true"
+
+section "Media nodes"
+run sh -c "ls -l /dev/media* /dev/video* /dev/v4l-subdev* 2>/dev/null || true"
+run sh -c "for node in /sys/class/video4linux/*/name; do [ -e \"\$node\" ] && printf '%s: ' \"\$node\" && cat \"\$node\"; done"
+
+section "Media topology"
+if command -v media-ctl >/dev/null 2>&1; then
+  for media in /dev/media*; do
+    [[ -e "$media" ]] || continue
+    run media-ctl -d "$media" -p
+  done
+else
+  echo "media-ctl is not installed"
+fi
+
+section "libcamera"
+if command -v cam >/dev/null 2>&1; then
+  run cam --list
+else
+  echo "libcamera-tools is not installed"
+fi

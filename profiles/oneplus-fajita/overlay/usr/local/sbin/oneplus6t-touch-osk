@@ -1,0 +1,477 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+device="${ONEPLUS6T_TOUCH_OSK_DEVICE:-${ONEPLUS6T_TOUCH_DEVICE:-}}"
+wayland_display="${WAYLAND_DISPLAY:-}"
+run_bin="${ONEPLUS6T_TOUCH_OSK_RUN_BIN:-/usr/local/bin/oneplus6t-osk}"
+cooldown_ms="${ONEPLUS6T_TOUCH_OSK_COOLDOWN_MS:-700}"
+finger_threshold="${ONEPLUS6T_TOUCH_OSK_FINGERS:-1}"
+tap_fingers="${ONEPLUS6T_TOUCH_OSK_TAP_FINGERS:-1 2 3 4}"
+bottom_swipe_enabled="${ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE:-1}"
+bottom_swipe_start_min_y="${ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_START_MIN_Y:-1650}"
+bottom_swipe_min_distance="${ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MIN_DISTANCE:-180}"
+bottom_swipe_max_horizontal="${ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MAX_HORIZONTAL:-520}"
+bottom_swipe_max_duration_ms="${ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MAX_DURATION_MS:-1400}"
+if (( EUID == 0 )); then
+  logfile="${ONEPLUS6T_TOUCH_OSK_LOG:-/run/oneplus6t-touch-osk.log}"
+else
+  logfile="${ONEPLUS6T_TOUCH_OSK_LOG:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/oneplus6t-touch-osk-listener.log}"
+fi
+ready_wait_seconds="${ONEPLUS6T_TOUCH_OSK_READY_WAIT_SECONDS:-12}"
+
+if ! [[ "$finger_threshold" =~ ^[1-9][0-9]*$ ]]; then
+  echo "oneplus6t-touch-osk: invalid ONEPLUS6T_TOUCH_OSK_FINGERS=$finger_threshold" >&2
+  exit 1
+fi
+for tap_finger in $tap_fingers; do
+  if ! [[ "$tap_finger" =~ ^[1-9][0-9]*$ ]]; then
+    echo "oneplus6t-touch-osk: invalid ONEPLUS6T_TOUCH_OSK_TAP_FINGERS=$tap_fingers" >&2
+    exit 1
+  fi
+done
+
+for numeric_setting in \
+  "$cooldown_ms" \
+  "$bottom_swipe_start_min_y" \
+  "$bottom_swipe_min_distance" \
+  "$bottom_swipe_max_horizontal" \
+  "$bottom_swipe_max_duration_ms"; do
+  if ! [[ "$numeric_setting" =~ ^[0-9]+$ ]]; then
+    echo "oneplus6t-touch-osk: invalid numeric gesture setting" >&2
+    exit 1
+  fi
+done
+
+input_event_name() {
+  local candidate="$1"
+  local resolved event_name
+
+  resolved="$(readlink -f "$candidate" 2>/dev/null || true)"
+  event_name="${resolved##*/}"
+  [[ "$event_name" == event* ]] || return 1
+  printf '%s\n' "$event_name"
+}
+
+is_touchscreen() {
+  local candidate="$1"
+  local event_name input_name properties
+
+  [[ -e "$candidate" ]] || return 1
+
+  if command -v udevadm >/dev/null 2>&1; then
+    properties="$(udevadm info --query=property --name="$candidate" 2>/dev/null || true)"
+    if grep -qx 'ID_INPUT_TOUCHSCREEN=1' <<<"$properties"; then
+      return 0
+    fi
+  fi
+
+  event_name="$(input_event_name "$candidate" || true)"
+  if [[ -n "$event_name" && -r "/sys/class/input/$event_name/device/name" ]]; then
+    input_name="$(cat "/sys/class/input/$event_name/device/name" 2>/dev/null || true)"
+    if grep -Eqi 'touch|touchscreen|fts|goodix|synaptics|himax|focal|s6sy' <<<"$input_name"; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+logf() {
+  printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$logfile"
+}
+
+now_ms() {
+  date +%s%3N 2>/dev/null || printf '%s000\n' "$(date +%s)"
+}
+
+abs_int() {
+  local value="$1"
+  if (( value < 0 )); then
+    printf '%s\n' "$((-value))"
+  else
+    printf '%s\n' "$value"
+  fi
+}
+
+resolve_wayland_socket() {
+  local runtime="$1"
+  local candidate
+
+  if [[ -n "$wayland_display" && -S "$runtime/$wayland_display" ]]; then
+    printf '%s\n' "$wayland_display"
+    return 0
+  fi
+
+  for candidate in "$runtime"/wayland-*; do
+    [[ -S "$candidate" ]] || continue
+    wayland_display="${candidate##*/}"
+    printf '%s\n' "$wayland_display"
+    return 0
+  done
+
+  return 1
+}
+
+resolve_hypr_signature() {
+  local runtime="$1"
+  local candidate
+
+  for candidate in "$runtime"/hypr/*; do
+    [[ -S "$candidate/.socket.sock" ]] || continue
+    printf '%s\n' "${candidate##*/}"
+    return 0
+  done
+
+  return 1
+}
+
+wait_for_display() {
+  local runtime="$1"
+  local remaining="$ready_wait_seconds"
+  local current_wayland=""
+  local current_sig=""
+
+  while (( remaining > 0 )); do
+    current_wayland="$(resolve_wayland_socket "$runtime" || true)"
+    current_sig="$(resolve_hypr_signature "$runtime" || true)"
+
+    if [[ -n "$current_wayland" && -S "$runtime/$current_wayland" && -n "$current_sig" ]]; then
+      return 0
+    fi
+
+    remaining=$((remaining - 1))
+    sleep 1
+  done
+
+  return 1
+}
+
+find_touch_device() {
+  local candidate
+
+  for candidate in /dev/input/by-path/* /dev/input/event*; do
+    if is_touchscreen "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+if [[ -n "$device" && ! -e "$device" ]]; then
+  echo "oneplus6t-touch-osk: configured touch device does not exist: $device" >&2
+  device=""
+fi
+
+if [[ -z "$device" ]]; then
+  device="$(find_touch_device || true)"
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "oneplus6t-touch-osk: missing python3" >&2
+  exit 1
+fi
+if [[ ! -e "$device" ]]; then
+  echo "oneplus6t-touch-osk: no touch device found" >&2
+  exit 1
+fi
+if ! is_touchscreen "$device"; then
+  logf "selected device is not tagged as touchscreen: $device"
+fi
+
+logf "oneplus6t-touch-osk: watching $device for wvkbd gestures: tap fingers [$tap_fingers] and bottom-edge swipe-up"
+
+show_osk() {
+  local runtime="${XDG_RUNTIME_DIR:-/run/user/1000}"
+
+  if ! wait_for_display "$runtime"; then
+    logf "oneplus6t-touch-osk: wait for wayland/hyprland timed out"
+    return
+  fi
+
+  if [[ -z "$wayland_display" ]]; then
+    wayland_display="$(resolve_wayland_socket "$runtime" || echo wayland-1)"
+  fi
+
+  if (( EUID == 0 )) && command -v runuser >/dev/null 2>&1 && id alarm >/dev/null 2>&1; then
+    XDG_RUNTIME_DIR="$runtime" \
+    WAYLAND_DISPLAY="$wayland_display" \
+    XDG_SESSION_TYPE=wayland \
+    XDG_CURRENT_DESKTOP=Hyprland \
+      runuser -u alarm -- "$run_bin" show >>"$logfile" 2>&1 || true
+    return
+  fi
+
+  export XDG_RUNTIME_DIR="$runtime"
+  export WAYLAND_DISPLAY="$wayland_display"
+  export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+  export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-Hyprland}"
+  # oneplus6t-osk prefers wvkbd and applies the phone portrait/landscape sizing.
+  "$run_bin" show >>"$logfile" 2>&1 || true
+}
+
+export ONEPLUS6T_TOUCH_OSK_DEVICE_RESOLVED="$device"
+export ONEPLUS6T_TOUCH_OSK_RUN_BIN="$run_bin"
+export ONEPLUS6T_TOUCH_OSK_COOLDOWN_MS="$cooldown_ms"
+export ONEPLUS6T_TOUCH_OSK_FINGERS="$finger_threshold"
+export ONEPLUS6T_TOUCH_OSK_TAP_FINGERS="$tap_fingers"
+export ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE="$bottom_swipe_enabled"
+export ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_START_MIN_Y="$bottom_swipe_start_min_y"
+export ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MIN_DISTANCE="$bottom_swipe_min_distance"
+export ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MAX_HORIZONTAL="$bottom_swipe_max_horizontal"
+export ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MAX_DURATION_MS="$bottom_swipe_max_duration_ms"
+export ONEPLUS6T_TOUCH_OSK_LOG="$logfile"
+export ONEPLUS6T_TOUCH_OSK_READY_WAIT_SECONDS="$ready_wait_seconds"
+
+exec python3 - <<'PY'
+import glob
+import os
+import pwd
+import stat
+import struct
+import subprocess
+import time
+
+EV_KEY = 1
+EV_ABS = 3
+BTN_TOUCH = 330
+ABS_X = 0
+ABS_Y = 1
+ABS_MT_SLOT = 47
+ABS_MT_POSITION_X = 53
+ABS_MT_POSITION_Y = 54
+ABS_MT_TRACKING_ID = 57
+
+device = os.environ["ONEPLUS6T_TOUCH_OSK_DEVICE_RESOLVED"]
+run_bin = os.environ.get("ONEPLUS6T_TOUCH_OSK_RUN_BIN", "/usr/local/bin/oneplus6t-osk")
+logfile = os.environ.get("ONEPLUS6T_TOUCH_OSK_LOG", "/run/oneplus6t-touch-osk.log")
+cooldown_ms = int(os.environ.get("ONEPLUS6T_TOUCH_OSK_COOLDOWN_MS", "700"))
+finger_threshold = int(os.environ.get("ONEPLUS6T_TOUCH_OSK_FINGERS", "1"))
+tap_fingers = {
+    int(item)
+    for item in os.environ.get("ONEPLUS6T_TOUCH_OSK_TAP_FINGERS", "1 2 3 4").split()
+    if item.strip()
+}
+bottom_swipe_enabled = os.environ.get("ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE", "1") == "1"
+bottom_swipe_start_min_y = int(os.environ.get("ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_START_MIN_Y", "1650"))
+bottom_swipe_min_distance = int(os.environ.get("ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MIN_DISTANCE", "180"))
+bottom_swipe_max_horizontal = int(os.environ.get("ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MAX_HORIZONTAL", "520"))
+bottom_swipe_max_duration_ms = int(os.environ.get("ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MAX_DURATION_MS", "1400"))
+ready_wait_seconds = int(os.environ.get("ONEPLUS6T_TOUCH_OSK_READY_WAIT_SECONDS", "12"))
+
+event_struct = struct.Struct("llHHi")
+current_slot = 0
+last_shown = 0
+slots = {}
+
+
+def log(message):
+    with open(logfile, "a", encoding="utf-8") as handle:
+        handle.write(f"{time.strftime('%F %T')} {message}\n")
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def socket_exists(path):
+    try:
+        return stat.S_ISSOCK(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
+def resolve_wayland(runtime):
+    configured = os.environ.get("WAYLAND_DISPLAY", "")
+    if configured and socket_exists(os.path.join(runtime, configured)):
+        return configured
+    for candidate in sorted(glob.glob(os.path.join(runtime, "wayland-*"))):
+        if socket_exists(candidate):
+            return os.path.basename(candidate)
+    return "wayland-1"
+
+
+def resolve_hypr_signature(runtime):
+    for candidate in sorted(glob.glob(os.path.join(runtime, "hypr", "*"))):
+        if socket_exists(os.path.join(candidate, ".socket.sock")):
+            return os.path.basename(candidate)
+    return ""
+
+
+def wait_for_display(runtime):
+    deadline = time.time() + ready_wait_seconds
+    while time.time() < deadline:
+        wayland = resolve_wayland(runtime)
+        sig = resolve_hypr_signature(runtime)
+        if wayland and sig and socket_exists(os.path.join(runtime, wayland)):
+            return wayland, sig
+        time.sleep(1)
+    return resolve_wayland(runtime), resolve_hypr_signature(runtime)
+
+
+def resolve_session_uid():
+    configured = os.environ.get("ONEPLUS6T_SESSION_UID", "")
+    if configured.isdigit():
+        return int(configured)
+    for proc in sorted(glob.glob("/proc/[0-9]*")):
+        try:
+            with open(os.path.join(proc, "comm"), "r", encoding="utf-8") as handle:
+                if handle.read().strip() != "Hyprland":
+                    continue
+            return os.stat(proc).st_uid
+        except OSError:
+            continue
+    return 1000
+
+
+def resolve_session_user(uid):
+    configured = os.environ.get("ONEPLUS6T_SESSION_USER", "")
+    if configured:
+        return configured
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return "alarm"
+
+
+def resolve_session_home(uid, user):
+    try:
+        return pwd.getpwuid(uid).pw_dir
+    except KeyError:
+        return f"/home/{user}"
+
+
+def show_osk(reason):
+    session_uid = resolve_session_uid()
+    session_user = resolve_session_user(session_uid)
+    session_home = resolve_session_home(session_uid, session_user)
+    runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{session_uid}")
+    wayland, sig = wait_for_display(runtime)
+    env_pairs = [
+        f"XDG_RUNTIME_DIR={runtime}",
+        f"WAYLAND_DISPLAY={wayland}",
+        f"HOME={session_home}",
+        f"USER={session_user}",
+        f"LOGNAME={session_user}",
+        f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus",
+        "GDK_BACKEND=wayland",
+        "XDG_SESSION_TYPE=wayland",
+        "XDG_CURRENT_DESKTOP=Hyprland",
+    ]
+    if sig:
+        env_pairs.append(f"HYPRLAND_INSTANCE_SIGNATURE={sig}")
+
+    with open(logfile, "a", encoding="utf-8") as handle:
+        if os.geteuid() == 0:
+            command = ["runuser", "-u", session_user, "--", "env", *env_pairs, run_bin, "show"]
+        else:
+            env = os.environ.copy()
+            for pair in env_pairs:
+                key, value = pair.split("=", 1)
+                env[key] = value
+            command = [run_bin, "show"]
+            subprocess.run(command, env=env, stdout=handle, stderr=handle, check=False)
+            return
+        subprocess.run(command, stdout=handle, stderr=handle, check=False)
+
+
+def active_touch_count():
+    return sum(1 for slot in slots.values() if slot.get("active"))
+
+
+def trigger(reason):
+    global last_shown
+    current = now_ms()
+    if current - last_shown < cooldown_ms:
+        log(f"oneplus6t-touch-osk: skip {reason} during cooldown")
+        return
+    last_shown = current
+    log(f"oneplus6t-touch-osk: trigger {reason}")
+    show_osk(reason)
+
+
+def maybe_show_tap():
+    active = active_touch_count()
+    if active >= finger_threshold or active in tap_fingers:
+        trigger(f"{active}-finger tap")
+
+
+def start_slot(slot):
+    slots[slot] = {
+        "active": True,
+        "start_x": None,
+        "start_y": None,
+        "last_x": None,
+        "last_y": None,
+        "start_ms": now_ms(),
+        "swipe_triggered": False,
+    }
+
+
+def maybe_show_bottom_swipe(slot):
+    if not bottom_swipe_enabled:
+        return
+    state = slots.get(slot)
+    if not state or not state.get("active") or state.get("swipe_triggered"):
+        return
+    if None in (state.get("start_x"), state.get("start_y"), state.get("last_x"), state.get("last_y")):
+        return
+    if state["start_y"] < bottom_swipe_start_min_y:
+        return
+    dy = state["start_y"] - state["last_y"]
+    dx = abs(state["last_x"] - state["start_x"])
+    elapsed = now_ms() - state["start_ms"]
+    if dy >= bottom_swipe_min_distance and dx <= bottom_swipe_max_horizontal and elapsed <= bottom_swipe_max_duration_ms:
+        state["swipe_triggered"] = True
+        trigger("bottom-edge swipe-up")
+
+
+def clear_slot(slot):
+    maybe_show_bottom_swipe(slot)
+    state = slots.setdefault(slot, {})
+    state["active"] = False
+
+
+def record_position(slot, axis, value):
+    state = slots.get(slot)
+    if not state or not state.get("active"):
+        return
+    key = "last_x" if axis == "x" else "last_y"
+    start_key = "start_x" if axis == "x" else "start_y"
+    if state.get(start_key) is None:
+        state[start_key] = value
+    state[key] = value
+    maybe_show_bottom_swipe(slot)
+
+
+log(f"oneplus6t-touch-osk: python event reader active on {device}")
+
+with open(device, "rb", buffering=0) as event_file:
+    while True:
+        data = event_file.read(event_struct.size)
+        if len(data) != event_struct.size:
+            continue
+        _sec, _usec, event_type, code, value = event_struct.unpack(data)
+        if event_type == EV_ABS and code == ABS_MT_SLOT:
+            current_slot = value
+        elif event_type == EV_ABS and code == ABS_MT_TRACKING_ID:
+            if value < 0:
+                clear_slot(current_slot)
+            else:
+                start_slot(current_slot)
+                maybe_show_tap()
+        elif event_type == EV_ABS and code == ABS_MT_POSITION_X:
+            record_position(current_slot, "x", value)
+        elif event_type == EV_ABS and code == ABS_MT_POSITION_Y:
+            record_position(current_slot, "y", value)
+        elif event_type == EV_ABS and code == ABS_X:
+            record_position(0, "x", value)
+        elif event_type == EV_ABS and code == ABS_Y:
+            record_position(0, "y", value)
+        elif event_type == EV_KEY and code == BTN_TOUCH and value == 1 and finger_threshold <= 1:
+            start_slot(0)
+            maybe_show_tap()
+        elif event_type == EV_KEY and code == BTN_TOUCH and value == 0:
+            clear_slot(0)
+PY

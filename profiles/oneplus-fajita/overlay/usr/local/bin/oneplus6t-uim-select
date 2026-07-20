@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log() {
+  printf 'oneplus6t-uim-select: %s\n' "$*" >&2
+}
+
+qmi_timeout="${ONEPLUS6T_UIM_QMI_TIMEOUT:-18}"
+
+if command -v qmicli >/dev/null 2>&1; then
+  qmicli_cmd=(qmicli)
+elif command -v pmos-qmicli >/dev/null 2>&1; then
+  qmicli_cmd=(env LD_LIBRARY_PATH=/opt/pmos-compat/lib pmos-qmicli)
+elif [[ -x /opt/pmos-compat/bin/qmicli ]]; then
+  qmicli_cmd=(env LD_LIBRARY_PATH=/opt/pmos-compat/lib /opt/pmos-compat/bin/qmicli)
+else
+  log "qmicli is not installed"
+  exit 0
+fi
+
+target_args=()
+cards=""
+last_error=""
+
+try_target() {
+  target_args=("$@")
+  if cards="$(timeout "$qmi_timeout" "${qmicli_cmd[@]}" --silent "${target_args[@]}" --uim-get-card-status 2>&1)"; then
+    return 0
+  fi
+  last_error="$cards"
+  target_args=()
+  return 1
+}
+
+for _ in $(seq 1 45); do
+  if try_target -d qrtr://0; then
+    break
+  fi
+
+  if [[ -e /dev/modem ]] && try_target -d /dev/modem; then
+    break
+  fi
+
+  if [[ -e /dev/wwan0qmi0 ]] && try_target -d /dev/wwan0qmi0 --device-open-qmi; then
+    break
+  fi
+
+  sleep 1
+done
+
+if ((${#target_args[@]} == 0)); then
+  log "could not read UIM card status from any QMI target"
+  if [[ -n "$last_error" ]]; then
+    printf '%s\n' "$last_error" >&2
+  fi
+  exit 0
+fi
+
+run_qmi() {
+  timeout "$qmi_timeout" "${qmicli_cmd[@]}" --silent "${target_args[@]}" "$@"
+}
+
+if ! printf '%s\n' "$cards" | grep -Fq "Card state: 'present'"; then
+  log "no SIM card detected"
+  exit 0
+fi
+
+slot="$(printf '%s\n' "$cards" | awk '
+  /^Slot \[[0-9]+\]:/ {
+    slot=$2
+    gsub(/[^0-9]/, "", slot)
+  }
+  /Card state: '\''present'\''/ {
+    print slot
+    exit
+  }
+')"
+
+primary_slot="$(printf '%s\n' "$cards" | awk '
+  /Primary GW:/ && /slot/ {
+    for (i = 1; i <= NF; i++) {
+      if ($i == "slot") {
+        value=$(i + 1)
+        gsub(/[^0-9]/, "", value)
+        print value
+        exit
+      }
+    }
+  }
+')"
+
+if [[ -n "$primary_slot" && "$primary_slot" == "$slot" ]]; then
+  log "Primary GW provisioning already selected on present SIM slot ${slot}"
+  exit 0
+fi
+
+aid="$(printf '%s\n' "$cards" | awk '
+  /^Slot \[[0-9]+\]:/ {
+    slot=$2
+    gsub(/[^0-9]/, "", slot)
+    in_slot=(slot == wanted)
+    in_usim=0
+  }
+  in_slot && /Application type:  '\''usim \(2\)'\''/ {
+    in_usim=1
+  }
+  in_slot && in_usim && /Application ID:/ {
+    getline
+    gsub(/[^A-Fa-f0-9]/, "", $0)
+    print $0
+    exit
+  }
+' wanted="$slot")"
+
+if [[ -z "$slot" || -z "$aid" ]]; then
+  log "could not derive SIM slot/AID"
+  exit 0
+fi
+
+log "activating Primary GW on slot ${slot}"
+run_qmi \
+  --uim-change-provisioning-session="slot=${slot},activate=yes,session-type=primary-gw-provisioning,aid=${aid}"

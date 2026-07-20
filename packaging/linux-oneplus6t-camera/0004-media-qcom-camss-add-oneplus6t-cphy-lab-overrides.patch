@@ -1,0 +1,152 @@
+From: LinuxPhone project <linuxphone@localhost>
+Subject: [PATCH] media: qcom: camss: add OnePlus 6T C-PHY lab overrides
+
+The OnePlus 6T main rear IMX519 path is detected and reaches sensor stream-on,
+but frames do not reach userspace. Pkgrel 6 diagnostics show the failure is
+isolated to the SDM845 C-PHY receive path:
+
+  imx519 -> CSIPHY0 C-PHY -> CSID0 -> RDI/VFE
+
+Add disabled-by-default module parameters for controlled lab experiments around
+the remaining likely receive-path values:
+
+  oneplus6t_cphy_lane_assign
+  oneplus6t_cphy_active_lanes
+  oneplus6t_cphy_ctrl5
+  oneplus6t_cphy_settle
+
+These are not production policy. They are a way to test lane assignment, lane
+enable/control, settle timing, and the CSID active-lane field without rebuilding
+the kernel for every single candidate value.
+---
+ drivers/media/platform/qcom/camss/camss-csid-gen2.c     | 13 +++++++++++++
+ drivers/media/platform/qcom/camss/camss-csid.c          | 10 ++++++++++
+ drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c | 15 +++++++++++++++
+ drivers/media/platform/qcom/camss/camss.c               | 22 ++++++++++++++++++++++
+ drivers/media/platform/qcom/camss/camss.h               |  5 +++++
+ 5 files changed, 65 insertions(+)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-csid-gen2.c b/drivers/media/platform/qcom/camss/camss-csid-gen2.c
+--- a/drivers/media/platform/qcom/camss/camss-csid-gen2.c
++++ b/drivers/media/platform/qcom/camss/camss-csid-gen2.c
+@@ -184,6 +184,19 @@ static void __csid_configure_rx(struct csid_device *csid,
+ 	if (!lane_cnt)
+ 		lane_cnt = 4;
+ 
++	if (phy->cphy && camss_oneplus6t_cphy_active_lanes > 0 &&
++	    camss_oneplus6t_cphy_active_lanes <= 4) {
++		dev_info(csid->camss->dev,
++			 "oneplus6t-camss: csid%u override cphy active lanes %u -> %d\n",
++			 csid->id, lane_cnt,
++			 camss_oneplus6t_cphy_active_lanes);
++		lane_cnt = camss_oneplus6t_cphy_active_lanes;
++	} else if (phy->cphy && camss_oneplus6t_cphy_active_lanes > 0) {
++		dev_warn_once(csid->camss->dev,
++			      "oneplus6t-camss: ignoring invalid cphy active lanes override %d\n",
++			      camss_oneplus6t_cphy_active_lanes);
++	}
++
+ 	cfg0 = (lane_cnt - 1) << CSI2_RX_CFG0_NUM_ACTIVE_LANES;
+ 	cfg0 |= phy->lane_assign << CSI2_RX_CFG0_DL0_INPUT_SEL;
+ 	cfg0 |= phy->csiphy_id << CSI2_RX_CFG0_PHY_NUM_SEL;
+diff --git a/drivers/media/platform/qcom/camss/camss-csid.c b/drivers/media/platform/qcom/camss/camss-csid.c
+--- a/drivers/media/platform/qcom/camss/camss-csid.c
++++ b/drivers/media/platform/qcom/camss/camss-csid.c
+@@ -1208,6 +1208,16 @@ static int csid_link_setup(struct media_entity *entity,
+ 		csid->phy.lane_cnt = lane_cfg->num_data;
+ 		csid->phy.lane_assign = csid_get_lane_assign(lane_cfg);
+ 
++		if (csid->phy.cphy && csid->phy.lane_cnt == 3 &&
++		    camss_oneplus6t_cphy_lane_assign >= 0) {
++			u32 override = camss_oneplus6t_cphy_lane_assign & 0xfff;
++
++			dev_info(csid->camss->dev,
++				 "oneplus6t-camss: csid%u override cphy lane assign 0x%x -> 0x%x\n",
++				 csid->id, csid->phy.lane_assign, override);
++			csid->phy.lane_assign = override;
++		}
++
+ 		dev_info(csid->camss->dev,
+ 			 "oneplus6t-camss: csid%u link csiphy%u cphy=%u lanes=%u assign=0x%x data=%u,%u,%u,%u\n",
+ 			 csid->id, csid->phy.csiphy_id, csid->phy.cphy,
+diff --git a/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c b/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
+--- a/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
++++ b/drivers/media/platform/qcom/camss/camss-csiphy-3ph-1-0.c
+@@ -659,6 +659,14 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
+ 
+ 	settle_cnt = csiphy_settle_cnt_calc(link_freq, csiphy->timer_clk_rate);
+ 
++	if (c->cphy && camss_oneplus6t_cphy_settle >= 0) {
++		dev_info(csiphy->camss->dev,
++			 "oneplus6t-camss: csiphy%u override cphy settle %u -> %d\n",
++			 csiphy->id, settle_cnt,
++			 camss_oneplus6t_cphy_settle & 0xff);
++		settle_cnt = camss_oneplus6t_cphy_settle & 0xff;
++	}
++
+ 	dev_info(csiphy->camss->dev,
+ 		 "oneplus6t-camss: csiphy%u lanes enable cphy=%u num_data=%u data=%u,%u,%u,%u link=%lld timer=%u settle=%u mask=0x%02x\n",
+ 		 csiphy->id, c->cphy, c->num_data,
+@@ -673,6 +681,13 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
+ 	for (i = 0; i < c->num_data; i++)
+ 		val |= BIT(c->data[i].pos * 2);
+ 
++	if (c->cphy && camss_oneplus6t_cphy_ctrl5 >= 0) {
++		dev_info(csiphy->camss->dev,
++			 "oneplus6t-camss: csiphy%u override cphy ctrl5 0x%02x -> 0x%02x\n",
++			 csiphy->id, val, camss_oneplus6t_cphy_ctrl5 & 0xff);
++		val = camss_oneplus6t_cphy_ctrl5 & 0xff;
++	}
++
+ 	writel_relaxed(val, csiphy->base + CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(5));
+ 
+ 	val = CSIPHY_3PH_CMN_CSI_COMMON_CTRL6_COMMON_PWRDN_B;
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -26,6 +26,28 @@
+ #define CAMSS_CLOCK_MARGIN_NUMERATOR 105
+ #define CAMSS_CLOCK_MARGIN_DENOMINATOR 100
+ 
++int camss_oneplus6t_cphy_lane_assign = -1;
++module_param_named(oneplus6t_cphy_lane_assign,
++		   camss_oneplus6t_cphy_lane_assign, int, 0644);
++MODULE_PARM_DESC(oneplus6t_cphy_lane_assign,
++		 "OnePlus 6T lab: override C-PHY CSID lane assignment; -1 disables");
++
++int camss_oneplus6t_cphy_active_lanes = -1;
++module_param_named(oneplus6t_cphy_active_lanes,
++		   camss_oneplus6t_cphy_active_lanes, int, 0644);
++MODULE_PARM_DESC(oneplus6t_cphy_active_lanes,
++		 "OnePlus 6T lab: override C-PHY CSID active lane count; -1 disables");
++
++int camss_oneplus6t_cphy_ctrl5 = -1;
++module_param_named(oneplus6t_cphy_ctrl5, camss_oneplus6t_cphy_ctrl5, int, 0644);
++MODULE_PARM_DESC(oneplus6t_cphy_ctrl5,
++		 "OnePlus 6T lab: override C-PHY common CTRL5 lane enable value; -1 disables");
++
++int camss_oneplus6t_cphy_settle = -1;
++module_param_named(oneplus6t_cphy_settle, camss_oneplus6t_cphy_settle, int, 0644);
++MODULE_PARM_DESC(oneplus6t_cphy_settle,
++		 "OnePlus 6T lab: override C-PHY settle count; -1 disables");
++
+ static const struct parent_dev_ops vfe_parent_dev_ops;
+ 
+ static const struct camss_subdev_resources csiphy_res_8x16[] = {
+diff --git a/drivers/media/platform/qcom/camss/camss.h b/drivers/media/platform/qcom/camss/camss.h
+--- a/drivers/media/platform/qcom/camss/camss.h
++++ b/drivers/media/platform/qcom/camss/camss.h
+@@ -132,6 +132,11 @@ struct camss_clock {
+ 	u32 nfreqs;
+ };
+ 
++extern int camss_oneplus6t_cphy_lane_assign;
++extern int camss_oneplus6t_cphy_active_lanes;
++extern int camss_oneplus6t_cphy_ctrl5;
++extern int camss_oneplus6t_cphy_settle;
++
+ struct parent_dev_ops {
+ 	int (*get)(struct camss *camss, int id);
+ 	int (*put)(struct camss *camss, int id);
+-- 
+2.50.1

@@ -1,0 +1,64 @@
+# Runtime packages needed for the phone UX and PMOS "Works" feature parity.
+#
+# The rootfs builder installs this manifest into the generated image when
+# INSTALL_PROFILE_PACKAGES=1.
+
+# Display, gestures, and controls
+archlinuxarm-keyring
+btrfs-progs
+opendoas
+git
+gcc
+make
+pkgconf
+wayland
+libinput
+evtest
+hyprland
+brightnessctl
+foot
+fzf
+grim
+python
+python-pillow
+cairo
+pango
+libxkbcommon
+linux-firmware-qcom
+
+# Audio and volume rocker support
+alsa-utils
+pipewire
+pipewire-pulse
+wireplumber
+rtkit
+
+# Wi-Fi and network UI base
+networkmanager
+wpa_supplicant
+openssh
+
+# Bluetooth
+bluez
+bluez-utils
+
+# Battery and power reporting
+upower
+
+# Sensors
+iio-sensor-proxy
+
+# Mobile data/SMS/calls
+modemmanager
+libqmi
+libmbim
+mobile-broadband-provider-info
+usb_modeswitch
+gnome-calls
+chatty
+feedbackd
+callaudiod
+
+# Location/GPS validation and app-facing location service
+gpsd
+geoclue

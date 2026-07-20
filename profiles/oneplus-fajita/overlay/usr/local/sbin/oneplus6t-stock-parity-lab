@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -u
+
+section() {
+  printf '\n== %s ==\n' "$*"
+}
+
+run() {
+  printf '$ %s\n' "$*"
+  "$@" 2>&1 || true
+}
+
+run_shell() {
+  printf '$ %s\n' "$*"
+  sh -c "$*" 2>&1 || true
+}
+
+expect_reserved_memory() {
+  local stock_name="$1"
+  shift || true
+  local pattern found
+
+  for pattern in "$stock_name" "$@"; do
+    found="$(find /proc/device-tree/reserved-memory -maxdepth 1 -name "${pattern}*" -print -quit 2>/dev/null || true)"
+    if [ -n "$found" ]; then
+      printf 'OK reserved-memory: %s -> %s\n' "$stock_name" "${found##*/}"
+      return 0
+    fi
+  done
+
+  if [ "$#" -gt 0 ]; then
+    printf 'MISSING reserved-memory: %s (accepted aliases:' "$stock_name"
+    for pattern in "$@"; do
+      printf ' %s*' "$pattern"
+    done
+    printf ')\n'
+  else
+    printf 'MISSING reserved-memory: %s\n' "$stock_name"
+  fi
+}
+
+section "Stock Reference Contract"
+cat <<'EOF'
+Reference: recovered stock OnePlus 6T McLaren OxygenOS 10.3.8.
+Use this on the lab phone after each risky flash. PMOS is not the stability
+oracle; stock Android BSP behaviour is the comparison target.
+
+Stock clues captured:
+- camera: 4 Android camera devices, camera provider 2.4 plus OnePlus CameraHIDL
+- NFC: NXP NFC over I2C, eSE SKU, qti_esepowermanager, secure-element HAL
+- fingerprint: Android biometrics HAL, vendor fps HAL, qfp-daemon, fpc1020 files
+- stability: camera/modem/adsp/cdsp/slpi/gpu/video/wlan/qsee/ramoops regions
+- recovery: stock exposes ramdump and subsystem nodes for ADSP/CDSP/modem/SLPI/Venus
+EOF
+
+section "Identity"
+run date -u
+run uname -a
+run findmnt -n -o SOURCE,FSTYPE,OPTIONS /
+run cat /proc/cmdline
+
+section "Reserved Memory Compared To Stock"
+expect_reserved_memory camera_region camera-mem
+expect_reserved_memory modem_region 'mpss@' mpss modem
+expect_reserved_memory adsp_region adsp
+expect_reserved_memory cdsp_region cdsp
+expect_reserved_memory slpi_region slpi
+expect_reserved_memory gpu_region gpu
+expect_reserved_memory video_region venus video
+expect_reserved_memory wlan_fw_region wlan-msa wlan_fw
+expect_reserved_memory qseecom_region qseecom
+expect_reserved_memory qseecom_ta_region qseecom_ta qseecom-ta
+expect_reserved_memory ramoops ramoops
+expect_reserved_memory mem_dump_region mem_dump mem-dump
+expect_reserved_memory secure_display_region secure-display secure_display
+expect_reserved_memory secure_sp_region secure-sp secure_sp
+run_shell "find /proc/device-tree/reserved-memory -maxdepth 1 -mindepth 1 -printf '%f\n' 2>/dev/null | sort"
+
+section "Remoteproc Subsystem And Ramdump"
+run_shell 'for f in /sys/class/remoteproc/remoteproc*/name /sys/class/remoteproc/remoteproc*/state /sys/class/remoteproc/remoteproc*/firmware; do [ -e "$f" ] && printf "%s: " "$f" && cat "$f"; done'
+run_shell "find /sys/class/ramdump /sys/class/subsys -maxdepth 2 -type l -o -type d 2>/dev/null | sort"
+run_shell "lsmod | grep -Ei 'qcom|qrtr|remoteproc|q6v5|sysmon|fastrpc|rpmsg|glink|ipa|ath10k|venus|camss' || true"
+
+section "Camera Lab"
+cat <<'EOF'
+Stock camera ID map from OxygenOS 10.3.8:
+- Android camera 0: back, 90 deg, 4656x3496 RGGB, cameraPosition 0
+- Android camera 1: front, 270 deg, 4608x3456 RGGB/QCFA, cameraPosition 1
+- Android camera 2: back, 90 deg, 5184x3880 RGGB, cameraPosition 2
+- Android camera 3: back, 90 deg, 4656x3496 RGGB, cameraPosition 0
+
+Current Linux lab finding: imx376 and imx371 can produce frames. imx519 is
+detected and exposes controls, but still times out before frame delivery, even
+with sensor test pattern enabled. Treat that as a CSI/CSIPHY/CSID/VFE routing
+or mode-timing problem before assuming userspace calibration is the root cause.
+EOF
+run_shell "pacman -Q linux-oneplus6t-camera 2>/dev/null || echo linux-oneplus6t-camera-not-installed"
+run_shell "command -v oneplus6t-camera-info >/dev/null && oneplus6t-camera-info || true"
+run_shell "find /sys/bus/platform/devices /sys/class/video4linux -maxdepth 3 \\( -iname '*cam*' -o -iname '*imx*' -o -iname '*csiphy*' -o -iname '*csid*' \\) -print 2>/dev/null | sort | sed -n '1,160p'"
+run_shell "for cam in /proc/device-tree/soc@0/cci@ac4a000/i2c-bus@*/camera@*; do [ -d \"\$cam\" ] || continue; echo \"-- \${cam##*/} --\"; printf 'compatible: '; tr -d '\\000' <\"\$cam/compatible\" 2>/dev/null || true; echo; for prop in port/endpoint/bus-type port/endpoint/data-lanes port/endpoint/link-frequencies clock-frequency rotation orientation; do [ -f \"\$cam/\$prop\" ] && printf '%s: ' \"\$prop\" && od -An -tx1 \"\$cam/\$prop\"; done; done"
+run_shell "for ep in /proc/device-tree/soc@0/camss@*/ports/port@*/endpoint; do [ -d \"\$ep\" ] || continue; echo \"-- \$ep --\"; for prop in bus-type data-lanes; do [ -f \"\$ep/\$prop\" ] && printf '%s: ' \"\$prop\" && od -An -tx1 \"\$ep/\$prop\"; done; done"
+
+section "NFC Lab"
+cat <<'EOF'
+Stock target: NXP NFC over I2C with ro.nfc.port=I2C and eSE SKU.
+Linux success starts with a visible I2C/SPI device, kernel driver, or NFC netlink
+device before any UI/payment stack work.
+EOF
+run_shell "find /sys/bus/i2c/devices /sys/bus/spi/devices /sys/class -maxdepth 4 \\( -iname '*nfc*' -o -iname '*nxp*' -o -iname '*pn5*' -o -iname '*ese*' \\) -print 2>/dev/null | sort"
+run_shell "lsmod | grep -Ei '(^nfc|nci|nxp|pn5|pn54|pn553|pn544|st21|ese)' || true"
+run_shell "command -v rfkill >/dev/null && rfkill list || true"
+
+section "Fingerprint Lab"
+cat <<'EOF'
+Stock target: Android biometrics HAL, vendor fps HAL, qfp-daemon, fpc1020
+keylayout/idc files. Linux success starts with a visible input/sysfs device and
+stable kernel driver before any unlock UI.
+EOF
+run_shell "find /sys/bus /sys/class /proc/device-tree -maxdepth 5 \\( -iname '*finger*' -o -iname '*fpc*' -o -iname '*fps*' -o -iname '*goodix*' -o -iname '*qfp*' \\) -print 2>/dev/null | sort | sed -n '1,200p'"
+run_shell "grep -H . /proc/bus/input/devices | grep -Ei 'finger|fpc|goodix|qfp' -C 3 || true"
+run_shell "lsmod | grep -Ei 'finger|fpc|goodix|qfp' || true"
+
+section "Video Decode / Venus Lab"
+run_shell "find /sys -maxdepth 5 \\( -iname '*venus*' -o -iname '*video*' -o -iname '*vcodec*' \\) -print 2>/dev/null | sort | sed -n '1,180p'"
+run_shell "ls -l /dev/video* /dev/media* 2>/dev/null || true"
+run_shell "lsmod | grep -Ei 'venus|v4l2|videodev|h264|vcodec' || true"
+
+section "Power And SSH"
+run systemctl is-active sshd.service
+run systemctl is-active oneplus6t-cpu-power.service
+run_shell "command -v oneplus6t-cpu-power >/dev/null && oneplus6t-cpu-power status || true"
+
+section "Crash Evidence"
+run_shell "find /sys/fs/pstore -maxdepth 1 -type f -printf '%f %s bytes\n' 2>/dev/null | sort"
+run_shell "journalctl -b --no-pager | grep -Ei 'crash|panic|fatal|oops|ramdump|subsys|remoteproc|modem|adsp|cdsp|slpi|venus|camera|camss|nfc|finger|qfp|fps|fastrpc|qrtr' | tail -n 360"

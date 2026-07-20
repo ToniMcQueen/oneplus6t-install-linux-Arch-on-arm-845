@@ -1,0 +1,27 @@
+# Maintainer: LinuxPhone project
+# Reference: Alpine community/hexagonrpcd 0.4.0-r3
+
+pkgname=hexagonrpcd
+pkgver=0.4.0
+pkgrel=2
+pkgdesc="Qualcomm Hexagon FastRPC filesystem daemon"
+arch=('aarch64')
+url="https://github.com/linux-msm/hexagonrpc"
+license=('GPL-3.0-or-later')
+depends=('glibc')
+makedepends=('meson' 'ninja' 'linux-headers')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/linux-msm/hexagonrpc/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('fe742549a2672902d59a90dafd741a9a0acbeca059e07ff5130e2b525a66574f')
+
+build() {
+  arch-meson "hexagonrpc-$pkgver" build
+  meson compile -C build
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package() {
+  DESTDIR="$pkgdir" meson install --no-rebuild -C build
+}

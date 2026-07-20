@@ -1,0 +1,228 @@
+OnePlus 6T Arch Linux Installer Original Ownership, Terms and Yield-Back
+License 1.0 (O6T-LINUX-1.0)
+
+Copyright (c) 2026 Toni McQueen
+
+O6T-LINUX-1.0 is adapted from the BOOTY-1.1 Booty Original Ownership Terms
+and Yield-Back Licence model.
+
+This is a custom, non-open-source licence. It grants only the permissions
+stated below. Third-party components and materials remain governed by their
+own licences and are excluded from the definition of the Software.
+
+1. Definitions
+
+"Software" means the OnePlus 6T Arch Linux Installer project materials owned
+by Toni McQueen and distributed with this licence, including installer
+scripts, build scripts, profile glue, project-authored configuration files,
+project documentation, project-owned boot or marketing assets, and updates
+supplied under this licence.
+
+"Software" does not include third-party code, third-party configuration files,
+firmware, kernel source, kernel patches owned by other authors, postmarketOS
+boot artifacts, Arch Linux ARM packages, vendor source trees, libraries,
+protocol specifications, trademarks, or any material listed in
+docs/THIRD-PARTY-NOTICES.md. Those materials remain under their own licences.
+
+"Project Notice Files" means LICENSE, NOTICE, docs/THIRD-PARTY-NOTICES.md,
+and any file-level copyright, attribution, provenance, or licence notice
+distributed with the Software.
+
+"Modified Version" means any version of the Software that is patched,
+translated, adapted, decompiled and recompiled, combined with Software-derived
+code, or otherwise modified in a way that requires permission from the
+copyright holder. Independently created programs that merely communicate with
+the Software through a documented, general-purpose interface are not Modified
+Versions solely because of that communication.
+
+"Corresponding Modification Materials" means the complete preferred materials
+needed to understand, reproduce, build, install, and run a Modified Version,
+including source code, binary patches, build scripts, configuration changes,
+toolchain instructions, and modification documentation. Materials unrelated to
+the modification do not need to be provided.
+
+"Commercial Purpose" means use intended to obtain direct or indirect
+commercial advantage or monetary compensation. It includes:
+
+- sale, licensing, paid distribution, or paid access;
+- use in a product, subscription, hosted service, or paid client deliverable;
+- internal business use that materially supports revenue-generating activity;
+- bundling with commercial hardware, software, training, or support;
+- use supported by advertising, sponsorship, or product-linked donations;
+- use by a contractor or Affiliate for any of the above; and
+- avoiding these conditions by providing access to functionality over a
+  network instead of distributing a copy.
+
+"Affiliate" means an entity that controls, is controlled by, or is under
+common control with another entity.
+
+"Non-Commercial Purpose" means personal use, education, academic research,
+charitable activity, hobby development, evaluation, or non-commercial
+redistribution without commercial advantage or monetary compensation.
+
+2. Grant
+
+Subject to every condition in this licence, permission is granted, free of
+charge, to use, copy, modify, and redistribute the Software solely for
+Non-Commercial Purposes. No Commercial Purpose is permitted without a separate
+written commercial licence from the copyright holder.
+
+This licence is conditional. No ownership interest is transferred. No patent,
+trademark, trade name, service mark, branding, endorsement, sublicensing, or
+commercial right is granted. All rights not expressly granted are reserved by
+the copyright holder.
+
+No recipient may relicense the Software, sublicense the Software, sell access
+to the Software, or impose additional terms that remove or weaken this
+licence, the Project Notice Files, the non-commercial restriction, or the
+share-back obligation.
+
+3. Notices and Attribution
+
+Every copy or substantial portion of the Software must include this licence,
+the copyright notice above, the supplied NOTICE file, and the supplied
+third-party notices. A Modified Version must be clearly marked as modified and
+identify the modifier, date, and material changes.
+
+Project Notice Files must be retained in source distributions, binary
+distributions, installer archives, phone images, boot/root image bundles,
+documentation bundles, mirrors, forks, and hosted download pages. If the
+distribution format cannot preserve the original file layout, the same notices
+must be reproduced in an obvious documentation or about/legal location.
+
+Copyright, attribution, funding, contact, and provenance notices included in
+the Software must not be removed, hidden, or misrepresented in redistributed
+copies. A technical compatibility change may alter runtime display of a notice
+only when the Project Notice Files remain intact and the redistribution still
+provides clear attribution to Toni McQueen.
+
+4. Mandatory Share-Back
+
+Anyone who creates a Modified Version must provide the copyright holder,
+without charge, with:
+
+- the complete modified executable, image, installer, or binary artifact; and
+- all Corresponding Modification Materials.
+
+Delivery must occur no later than 30 days after the Modified Version is first
+run, tested, published, made available to another person, or used for any
+purpose, whichever occurs first. Delivery may be made through
+https://github.com/ToniMcQueen/oneplus6t-install-linux-Arch-on-arm-845 or another method
+designated by the copyright holder.
+
+The required materials must be sufficient for the copyright holder to inspect,
+reproduce, build, install, and run the Modified Version. When applicable, this
+includes a complete source tree or patch series, build scripts, package
+manifests, configuration files, generated image metadata, checksums, commit
+identifiers, toolchain notes, and instructions for applying the changes.
+
+The share-back obligation applies even when the Modified Version is used only
+internally or made available through a network. It does not require disclosure
+of independent programs or confidential information that is unrelated to the
+modification.
+
+Failure to provide the share-back materials on time is a licence breach even
+if the Modified Version was never sold, published, advertised, or distributed
+outside the modifier's own organisation.
+
+5. Redistribution of Modified Versions
+
+A redistributed Modified Version must remain under O6T-LINUX-1.0. No
+additional term may remove or weaken the non-commercial, attribution, notice,
+or share-back conditions. This clause does not alter the licence of an
+independent work merely aggregated with the Software.
+
+Redistributors must not describe a Modified Version as the official Toni
+McQueen release unless it is the unmodified official release. Modified
+Versions must use a different name or a clear modifier label, and must not
+create confusion about source, sponsorship, endorsement, support, or update
+responsibility.
+
+No redistributed copy may use technical measures, private update gates, access
+controls, obfuscation, or packaging tricks to avoid the notice, attribution,
+non-commercial, or share-back conditions.
+
+6. Third-Party Rights
+
+This licence applies only to rights owned by Toni McQueen. It does not replace,
+restrict, relicense, or grant rights in third-party code, libraries, assets,
+firmware, kernel materials, protocol specifications, trademarks, or other
+materials. Recipients must comply with docs/THIRD-PARTY-NOTICES.md and all
+applicable third-party licences.
+
+If a third-party licence gives recipients broader rights in that third-party
+material, this licence does not reduce those rights. If a third-party licence
+requires source availability, notice retention, copyleft terms, patent terms,
+or other obligations, those obligations apply to that third-party material
+independently of this licence.
+
+If a file, package, dependency, kernel component, firmware file, boot artifact,
+or source tree is governed by a third-party licence, the third-party licence
+controls that material. O6T-LINUX-1.0 applies only to the separable Toni
+McQueen original material and to modifications of that material.
+
+Nothing in this licence authorises distribution of third-party material in a
+way that violates the applicable third-party licence. Recipients are
+responsible for checking and satisfying those obligations before distributing
+source, binaries, phone images, installer bundles, or hosted downloads.
+
+7. Names and Marks
+
+This licence does not grant permission to use "Toni McQueen", "OnePlus 6T Arch
+Linux Installer", project logos, project branding, or the copyright holder's
+name to imply endorsement or to brand a derived product. Accurate attribution
+and factual compatibility statements are permitted.
+
+Public claims about compatibility, sponsorship, support, performance,
+security, update status, or hardware support must be accurate and must not
+suggest that Toni McQueen is responsible for a Modified Version unless the
+copyright holder has agreed in writing.
+
+8. No Source Availability Promise
+
+Distribution of an executable, phone image, boot image, root image, or other
+binary artifact under this licence does not obligate the copyright holder to
+publish original source code that is not otherwise required by an applicable
+third-party licence. Section 4 applies to materials created or used by a
+person modifying the Software.
+
+9. Termination and Cure
+
+Rights under this licence terminate automatically upon breach. For a first
+breach, rights are reinstated if the breach is fully cured within 30 days after
+the person discovers it or receives notice, whichever occurs first. Repeated,
+wilful, or uncured breaches require express written reinstatement.
+
+After termination, the person or entity in breach must stop using, copying,
+modifying, distributing, hosting, advertising, or providing access to the
+Software and any Modified Version unless and until rights are reinstated.
+Termination does not remove obligations that by their nature must survive,
+including notice retention, attribution, share-back, third-party licence
+compliance, warranty disclaimer, liability limitation, and governing law.
+
+10. No Waiver; Severability
+
+Failure to enforce a provision is not a waiver. If a provision is held
+unenforceable, it shall be narrowed only as much as necessary, and the
+remaining provisions continue in effect. This licence may not be avoided by
+using an Affiliate, contractor, intermediary, hosted service, or technical
+arrangement to perform an act that the licensee could not perform directly.
+
+11. Governing Law
+
+This licence is governed by the laws of England and Wales, without regard to
+conflict-of-law rules. The courts of England and Wales have exclusive
+jurisdiction, except where applicable law requires otherwise.
+
+12. Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+O6T-LINUX-1.0 contains non-commercial-use and mandatory share-back
+restrictions. It is not approved by the Open Source Initiative and must not be
+described as an open-source licence.

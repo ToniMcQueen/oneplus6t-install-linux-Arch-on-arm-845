@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+power_dev="${ONEPLUS6T_POWER_EVENT:-/dev/input/by-path/platform-c440000.spmi-platform-c440000.spmi:pmic@0:pon@800:pwrkey-event}"
+volume_dev="${ONEPLUS6T_VOLUME_EVENT:-/dev/input/by-path/platform-gpio-keys-event}"
+fifo="/run/oneplus6t-keychords.fifo"
+enable_lock="${ONEPLUS6T_ENABLE_LOCK:-0}"
+
+if [[ ! -e "$power_dev" ]]; then
+  power_dev="/dev/input/event0"
+fi
+if [[ ! -e "$volume_dev" ]]; then
+  volume_dev="/dev/input/event3"
+fi
+
+if ! command -v evtest >/dev/null 2>&1; then
+  echo "oneplus6t-keychords: evtest is required" >&2
+  exit 1
+fi
+
+if [[ ! -r "$power_dev" || ! -r "$volume_dev" ]]; then
+  echo "oneplus6t-keychords: input devices unavailable: $power_dev $volume_dev" >&2
+  exit 1
+fi
+
+rm -f "$fifo"
+mkfifo "$fifo"
+
+cleanup() {
+  jobs -p | xargs -r kill 2>/dev/null || true
+  rm -f "$fifo"
+}
+trap cleanup EXIT INT TERM
+
+read_evtest() {
+  local dev="$1"
+  local tag="$2"
+
+  stdbuf -oL evtest "$dev" | while IFS= read -r line; do
+    case "$line" in
+      *"(EV_KEY)"*"(KEY_POWER)"*", value "*)
+        printf '%s KEY_POWER %s\n' "$tag" "${line##*value }" > "$fifo"
+        ;;
+      *"(EV_KEY)"*"(KEY_VOLUMEUP)"*", value "*)
+        printf '%s KEY_VOLUMEUP %s\n' "$tag" "${line##*value }" > "$fifo"
+        ;;
+    esac
+  done
+}
+
+run_screenshot() {
+  local runtime_dir="/run/user/1000"
+  local wayland_display="${WAYLAND_DISPLAY:-wayland-1}"
+  local hypr_sig="${HYPRLAND_INSTANCE_SIGNATURE:-}"
+  local -a env_args=(
+    HOME=/home/alarm
+    XDG_RUNTIME_DIR="$runtime_dir"
+    WAYLAND_DISPLAY="$wayland_display"
+    GDK_BACKEND=wayland
+    LD_LIBRARY_PATH=/usr/local/lib
+    DBUS_SESSION_BUS_ADDRESS=unix:path="$runtime_dir"/bus
+  )
+
+  if [[ -z "$hypr_sig" ]]; then
+    for instance in "$runtime_dir"/hypr/*; do
+      [[ -S "$instance/.socket.sock" ]] || continue
+      hypr_sig="${instance##*/}"
+    done
+  fi
+  if [[ -n "$hypr_sig" ]]; then
+    env_args+=(HYPRLAND_INSTANCE_SIGNATURE="$hypr_sig")
+  fi
+
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u alarm -- env "${env_args[@]}" /usr/local/bin/oneplus6t-screenshot
+  else
+    su - alarm -c 'HOME=/home/alarm XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 GDK_BACKEND=wayland LD_LIBRARY_PATH=/usr/local/lib DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus /usr/local/bin/oneplus6t-screenshot'
+  fi
+}
+
+run_lock() {
+  if [[ "$enable_lock" != "1" ]]; then
+    echo "oneplus6t-keychords: lock screen disabled; leaving auto-rotate path untouched" >&2
+    return 0
+  fi
+
+  /usr/local/bin/oneplus6t-lock
+}
+
+read_evtest "$power_dev" power &
+read_evtest "$volume_dev" volume &
+exec 3<> "$fifo"
+
+power_down=0
+volume_up_down=0
+last_power_press=0
+last_volume_press=0
+last_shot=0
+last_lock=0
+suppress_lock_on_power_release=0
+chord_window_sec="${ONEPLUS6T_SCREENSHOT_CHORD_WINDOW_SEC:-1}"
+power_lock_max_press_sec="${ONEPLUS6T_POWER_LOCK_MAX_PRESS_SEC:-3}"
+
+while read -r _tag key value; do
+  value="${value%%[^0-9-]*}"
+  now="$(date +%s)"
+
+  case "$key" in
+    KEY_POWER)
+      if [[ "$value" == "0" ]]; then
+        power_down=0
+        if [[ "$suppress_lock_on_power_release" == "1" ]]; then
+          suppress_lock_on_power_release=0
+        elif (( last_power_press > 0 &&
+                now - last_power_press <= power_lock_max_press_sec &&
+                now - last_lock >= 1 )); then
+          last_lock="$now"
+          run_lock || true &
+        fi
+      elif [[ "$value" == "1" ]]; then
+        power_down=1
+        last_power_press="$now"
+        suppress_lock_on_power_release=0
+      fi
+      ;;
+    KEY_VOLUMEUP)
+      if [[ "$value" == "0" ]]; then
+        volume_up_down=0
+      elif [[ "$value" == "1" ]]; then
+        volume_up_down=1
+        last_volume_press="$now"
+      fi
+      ;;
+  esac
+
+  if [[ "$power_down" == "1" && "$volume_up_down" == "1" ]]; then
+    if (( now - last_power_press <= chord_window_sec &&
+          now - last_volume_press <= chord_window_sec &&
+          now - last_shot >= 2 )); then
+      last_shot="$now"
+      last_power_press=0
+      last_volume_press=0
+      suppress_lock_on_power_release=1
+      run_screenshot || true
+    fi
+  fi
+done <&3

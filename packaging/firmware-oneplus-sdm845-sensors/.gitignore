@@ -1,0 +1,5 @@
+/src/
+/pkg/
+/sensor.files
+/*.tar.gz
+/*.pkg.tar.*

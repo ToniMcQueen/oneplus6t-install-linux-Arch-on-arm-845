@@ -1,0 +1,13 @@
+[Unit]
+Description=OnePlus 6T hardware key chord handler
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/oneplus6t-keychords
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

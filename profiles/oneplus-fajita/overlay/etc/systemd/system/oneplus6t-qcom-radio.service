@@ -1,0 +1,15 @@
+[Unit]
+Description=Load delayed OnePlus 6T Qualcomm modem remoteproc and rmtfs
+After=hexagonrpcd-sdsp.service iio-sensor-proxy.service pmos-compat-tqftpserv.service pmos-compat-pd-mapper.service
+Wants=hexagonrpcd-sdsp.service iio-sensor-proxy.service pmos-compat-tqftpserv.service pmos-compat-pd-mapper.service
+Before=NetworkManager.service ModemManager.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/sleep 15
+Environment=ONEPLUS6T_ENABLE_WIFI_REMOTEPROC=0
+ExecStart=/usr/local/sbin/oneplus6t-load-qcom-radio
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

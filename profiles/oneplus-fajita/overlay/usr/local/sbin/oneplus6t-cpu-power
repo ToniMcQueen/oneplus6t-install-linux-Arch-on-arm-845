@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG="${ONEPLUS6T_CPU_POWER_CONFIG:-/etc/oneplus6t-cpu-power.conf}"
+
+GOVERNOR_PREFERENCE="schedutil ondemand powersave performance"
+MIN_FREQ_KHZ="hardware-min"
+MAX_FREQ_KHZ="hardware-max"
+SET_ENERGY_PERFORMANCE_PREFERENCE=1
+ENERGY_PERFORMANCE_PREFERENCE="balance_power"
+
+if [[ -r "$CONFIG" ]]; then
+  # shellcheck source=/dev/null
+  source "$CONFIG"
+fi
+
+log() {
+  printf 'oneplus6t-cpu-power: %s\n' "$*" >&2
+}
+
+policy_dirs() {
+  local policy
+  for policy in /sys/devices/system/cpu/cpufreq/policy*; do
+    [[ -d "$policy" ]] && printf '%s\n' "$policy"
+  done
+}
+
+read_file() {
+  local path="$1"
+  [[ -r "$path" ]] && cat "$path"
+}
+
+choose_governor() {
+  local policy="$1"
+  local available candidate
+
+  available="$(read_file "$policy/scaling_available_governors" || true)"
+  for candidate in $GOVERNOR_PREFERENCE; do
+    if grep -qw -- "$candidate" <<<"$available"; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  read_file "$policy/scaling_governor" || true
+}
+
+resolve_freq() {
+  local policy="$1"
+  local requested="$2"
+  local side="$3"
+  local path
+
+  case "$requested" in
+    ""|"keep")
+      return
+      ;;
+    "hardware-min"|"cpuinfo-min"|"min")
+      path="$policy/cpuinfo_min_freq"
+      ;;
+    "hardware-max"|"cpuinfo-max"|"max")
+      path="$policy/cpuinfo_max_freq"
+      ;;
+    *[!0-9]*)
+      log "invalid ${side} frequency value for ${policy##*/}: $requested"
+      return 1
+      ;;
+    *)
+      printf '%s\n' "$requested"
+      return
+      ;;
+  esac
+
+  if [[ -r "$path" ]]; then
+    cat "$path"
+  fi
+}
+
+write_if_possible() {
+  local path="$1"
+  local value="$2"
+
+  [[ -n "$value" ]] || return 0
+  if [[ ! -w "$path" ]]; then
+    log "cannot write ${path}; skipping"
+    return 0
+  fi
+
+  printf '%s\n' "$value" > "$path"
+}
+
+set_energy_preference() {
+  local policy="$1"
+  local available path="$policy/energy_performance_preference"
+
+  [[ "$SET_ENERGY_PERFORMANCE_PREFERENCE" == "1" ]] || return 0
+  [[ -w "$path" ]] || return 0
+
+  if [[ -r "$policy/energy_performance_available_preferences" ]]; then
+    available="$(cat "$policy/energy_performance_available_preferences")"
+    if ! grep -qw -- "$ENERGY_PERFORMANCE_PREFERENCE" <<<"$available"; then
+      log "${policy##*/} does not offer energy preference $ENERGY_PERFORMANCE_PREFERENCE"
+      return 0
+    fi
+  fi
+
+  write_if_possible "$path" "$ENERGY_PERFORMANCE_PREFERENCE"
+}
+
+apply_frequencies() {
+  local policy="$1"
+  local min_freq="$2"
+  local max_freq="$3"
+  local current_min current_max
+
+  if [[ -z "$min_freq" && -z "$max_freq" ]]; then
+    return 0
+  fi
+
+  current_min="$(read_file "$policy/scaling_min_freq" || true)"
+  current_max="$(read_file "$policy/scaling_max_freq" || true)"
+
+  if [[ -n "$min_freq" && -n "$max_freq" && \
+        "$min_freq" =~ ^[0-9]+$ && "$max_freq" =~ ^[0-9]+$ && \
+        "$current_min" =~ ^[0-9]+$ && "$current_max" =~ ^[0-9]+$ ]]; then
+    if (( min_freq > max_freq )); then
+      log "${policy##*/} requested minimum is above maximum: $min_freq > $max_freq"
+      return 1
+    fi
+
+    if (( min_freq > current_max )); then
+      write_if_possible "$policy/scaling_max_freq" "$max_freq"
+      write_if_possible "$policy/scaling_min_freq" "$min_freq"
+      return 0
+    fi
+
+    if (( max_freq < current_min )); then
+      write_if_possible "$policy/scaling_min_freq" "$min_freq"
+      write_if_possible "$policy/scaling_max_freq" "$max_freq"
+      return 0
+    fi
+  fi
+
+  write_if_possible "$policy/scaling_min_freq" "$min_freq"
+  write_if_possible "$policy/scaling_max_freq" "$max_freq"
+}
+
+apply_policy() {
+  local policy="$1"
+  local gov min_freq max_freq
+
+  gov="$(choose_governor "$policy")"
+  write_if_possible "$policy/scaling_governor" "$gov"
+
+  min_freq="$(resolve_freq "$policy" "$MIN_FREQ_KHZ" "minimum")"
+  max_freq="$(resolve_freq "$policy" "$MAX_FREQ_KHZ" "maximum")"
+
+  apply_frequencies "$policy" "$min_freq" "$max_freq"
+  set_energy_preference "$policy"
+}
+
+apply_all() {
+  local policy count=0
+
+  while IFS= read -r policy; do
+    apply_policy "$policy"
+    count=$((count + 1))
+  done < <(policy_dirs)
+
+  if [[ "$count" -eq 0 ]]; then
+    log "no cpufreq policies found"
+    return 1
+  fi
+}
+
+status_policy() {
+  local policy="$1"
+  local name="${policy##*/}"
+  local field
+
+  printf '== %s ==\n' "$name"
+  for field in \
+    affected_cpus \
+    related_cpus \
+    scaling_driver \
+    scaling_available_governors \
+    scaling_governor \
+    cpuinfo_min_freq \
+    scaling_min_freq \
+    scaling_cur_freq \
+    scaling_max_freq \
+    cpuinfo_max_freq \
+    energy_performance_preference \
+    energy_performance_available_preferences; do
+    if [[ -r "$policy/$field" ]]; then
+      printf '%s: %s\n' "$field" "$(tr '\n' ' ' < "$policy/$field")"
+    fi
+  done
+}
+
+status_all() {
+  local policy count=0 zone type temp
+
+  printf 'config: %s\n' "$CONFIG"
+  while IFS= read -r policy; do
+    status_policy "$policy"
+    count=$((count + 1))
+  done < <(policy_dirs)
+
+  if [[ "$count" -eq 0 ]]; then
+    log "no cpufreq policies found"
+  fi
+
+  printf '\n== thermal ==\n'
+  for zone in /sys/class/thermal/thermal_zone*; do
+    [[ -d "$zone" ]] || continue
+    type="$(cat "$zone/type" 2>/dev/null || true)"
+    temp="$(cat "$zone/temp" 2>/dev/null || true)"
+    [[ -n "$type$temp" ]] && printf '%s type=%s temp_millic=%s\n' "${zone##*/}" "$type" "$temp"
+  done
+
+  printf '\n== top-cpu ==\n'
+  ps -eo pid,comm,pcpu,args --sort=-pcpu 2>/dev/null | sed -n '1,12p' || true
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: oneplus6t-cpu-power COMMAND
+
+Commands:
+  apply    apply /etc/oneplus6t-cpu-power.conf to cpufreq sysfs policies
+  status   print governors, frequencies, thermal zones, and top CPU processes
+EOF
+}
+
+case "${1:-status}" in
+  apply)
+    apply_all
+    ;;
+  status)
+    status_all
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

@@ -1,0 +1,148 @@
+From: LinuxPhone project <linuxphone@localhost>
+Subject: [PATCH] media: i2c: imx519: add OnePlus 6T stream readbacks
+
+The OnePlus 6T IMX519 path reaches MODE_SELECT streaming, but frames still do
+not appear at CSID/RDI. The previous lab patch ruled out the obvious C-PHY lane
+assignment, active-lane, settle, and CTRL5 permutations.
+
+Add disabled-by-default stream timing controls and enabled readback logging so
+the next test can distinguish "sensor did not accept the mode/stream writes"
+from "sensor appears configured, but no CSI packets reach CSID".
+
+Runtime parameters:
+
+  imx519.oneplus6t_force_common_regs=1
+  imx519.oneplus6t_stream_on_delay_ms=N
+  imx519.oneplus6t_stream_readback=0/1
+
+These are diagnostic controls only; the default behavior remains the same
+apart from the readback log lines in this lab kernel package.
+---
+ drivers/media/i2c/imx519.c | 76 +++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 74 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/i2c/imx519.c b/drivers/media/i2c/imx519.c
+--- a/drivers/media/i2c/imx519.c
++++ b/drivers/media/i2c/imx519.c
+@@ -144,6 +144,28 @@ static const s64 imx519_link_freq_menu[] = {
+ 	IMX519_DEFAULT_LINK_FREQ,
+ };
+ 
++static bool imx519_oneplus6t_force_common_regs;
++module_param_named(oneplus6t_force_common_regs,
++		   imx519_oneplus6t_force_common_regs, bool, 0644);
++MODULE_PARM_DESC(oneplus6t_force_common_regs,
++		 "OnePlus 6T lab: rewrite IMX519 common registers on every stream-on");
++
++static int imx519_oneplus6t_stream_on_delay_ms = -1;
++module_param_named(oneplus6t_stream_on_delay_ms,
++		   imx519_oneplus6t_stream_on_delay_ms, int, 0644);
++MODULE_PARM_DESC(oneplus6t_stream_on_delay_ms,
++		 "OnePlus 6T lab: delay after IMX519 stream-on before returning; -1 disables");
++
++/*
++ * Keep this enabled in the diagnostic package. It is low-volume and tells us
++ * whether the sensor accepted the mode and stream-on writes.
++ */
++static bool imx519_oneplus6t_stream_readback = true;
++module_param_named(oneplus6t_stream_readback,
++		   imx519_oneplus6t_stream_readback, bool, 0644);
++MODULE_PARM_DESC(oneplus6t_stream_readback,
++		 "OnePlus 6T lab: log IMX519 stream/timing register readbacks");
++
+ static const struct cci_reg_sequence mode_common_regs[] = {
+ 	{ CCI_REG8(0x0136), 0x18 },
+ 	{ CCI_REG8(0x0137), 0x00 },
+@@ -1455,6 +1476,40 @@ static int imx519_set_pad_format(struct v4l2_subdev *sd,
+ 	return -EINVAL;
+ }
+ 
++static void imx519_oneplus6t_log_stream_readback(struct imx519 *imx519,
++						 const char *stage)
++{
++	struct i2c_client *client = v4l2_get_subdevdata(&imx519->sd);
++	u64 mode = 0, line = 0, frame = 0, width = 0, height = 0;
++	u64 x_start = 0, y_start = 0, x_end = 0, y_end = 0;
++	u64 binning = 0, fmt1 = 0, fmt2 = 0, lane = 0, mipi_rate = 0;
++	int err = 0;
++
++	if (!imx519_oneplus6t_stream_readback)
++		return;
++
++	cci_read(imx519->regmap, IMX519_REG_MODE_SELECT, &mode, &err);
++	cci_read(imx519->regmap, IMX519_REG_FRAME_LENGTH, &frame, &err);
++	cci_read(imx519->regmap, CCI_REG16(0x0342), &line, &err);
++	cci_read(imx519->regmap, CCI_REG16(0x0344), &x_start, &err);
++	cci_read(imx519->regmap, CCI_REG16(0x0346), &y_start, &err);
++	cci_read(imx519->regmap, CCI_REG16(0x0348), &x_end, &err);
++	cci_read(imx519->regmap, CCI_REG16(0x034a), &y_end, &err);
++	cci_read(imx519->regmap, CCI_REG16(0x034c), &width, &err);
++	cci_read(imx519->regmap, CCI_REG16(0x034e), &height, &err);
++	cci_read(imx519->regmap, CCI_REG16(0x0900), &binning, &err);
++	cci_read(imx519->regmap, CCI_REG8(0x0112), &fmt1, &err);
++	cci_read(imx519->regmap, CCI_REG8(0x0113), &fmt2, &err);
++	cci_read(imx519->regmap, CCI_REG8(0x0114), &lane, &err);
++	cci_read(imx519->regmap, CCI_REG32(0x0820), &mipi_rate, &err);
++
++	dev_info(&client->dev,
++		 "oneplus6t-imx519: readback %s err=%d mode=0x%llx line=0x%llx frame=0x%llx out=%llux%llu crop=%llu,%llu-%llu,%llu bin=0x%llx fmt=%llx/%llx lane=0x%llx mipi=0x%llx\n",
++		 stage, err, mode, line, frame, width, height,
++		 x_start, y_start, x_end, y_end, binning, fmt1, fmt2, lane,
++		 mipi_rate);
++}
++
+ /* Start streaming */
+ static int imx519_start_streaming(struct imx519 *imx519)
+ {
+@@ -1474,7 +1531,14 @@ static int imx519_start_streaming(struct imx519 *imx519)
+ 		 imx519->hblank ? imx519->hblank->val : -1,
+ 		 imx519->exposure ? imx519->exposure->val : -1);
+ 
+-	if (!imx519->common_regs_written) {
++	if (imx519_oneplus6t_force_common_regs && imx519->common_regs_written) {
++		dev_info(&client->dev,
++			 "oneplus6t-imx519: forcing common register rewrite\n");
++		imx519->common_regs_written = false;
++	}
++
++	if (!imx519->common_regs_written) {
++		dev_info(&client->dev, "oneplus6t-imx519: writing common registers\n");
+ 		ret = cci_multi_reg_write(imx519->regmap, mode_common_regs,
+ 					  ARRAY_SIZE(mode_common_regs), NULL);
+ 
+@@ -1490,6 +1554,8 @@ static int imx519_start_streaming(struct imx519 *imx519)
+ 	ret = cci_multi_reg_write(imx519->regmap, reg_list->regs,
+ 				  reg_list->num_of_regs, NULL);
+ 	if (ret) {
++		dev_err(&client->dev, "oneplus6t-imx519: mode write failed %d\n",
++			ret);
+ 		dev_err(&client->dev, "%s failed to set mode\n", __func__);
+ 		return ret;
+ 	}
+@@ -1497,17 +1563,23 @@ static int imx519_start_streaming(struct imx519 *imx519)
+ 	/* Apply customized values from user */
+ 	ret =  __v4l2_ctrl_handler_setup(imx519->sd.ctrl_handler);
+ 	if (ret)
+ 		return ret;
+ 
++	imx519_oneplus6t_log_stream_readback(imx519, "before-stream-on");
++
+ 	/* set stream on register */
+ 	ret = cci_write(imx519->regmap, IMX519_REG_MODE_SELECT,
+ 			IMX519_MODE_STREAMING, NULL);
+ 	if (ret)
+ 		dev_err(&client->dev, "oneplus6t-imx519: stream-on write failed %d\n",
+ 			ret);
+ 	else
+ 		dev_info(&client->dev, "oneplus6t-imx519: stream-on register written\n");
+-	return ret;
++	if (!ret && imx519_oneplus6t_stream_on_delay_ms > 0)
++		msleep(imx519_oneplus6t_stream_on_delay_ms);
++
++	imx519_oneplus6t_log_stream_readback(imx519, "after-stream-on");
++	return ret;
+ }
+ 
+ /* Stop streaming */
+-- 
+2.50.1

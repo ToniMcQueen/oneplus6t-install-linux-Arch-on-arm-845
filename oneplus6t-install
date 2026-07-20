@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROFILE="${1:-oneplus-fajita}"
+
+print_brand_banner() {
+  cat <<'EOF'
++------------------------------------------------------------------------------+
+| TONI MCQUEEN - OnePlus 6T Arch Linux Installer                               |
+| Build freedom. Flash carefully. Support more public Linux phone development. |
+| This OnePlus 6T build is the proof. Help fund the next Linux phone leap.     |
+|                                                                              |
+| Next target: Fairphone 5 research, display-out, and deeper hardware support. |
+| CTA: please pay me at least a $1+ please.                                   |
+| Pay:     https://tonimcqueen.com/pay/                                       |
+| GoFund:  https://gofund.me/283160597                                       |
+| Contact: contact@tonimcqueen.com                                           |
+| Repo:    github.com/ToniMcQueen/oneplus6t-install-linux-Arch-on-arm-845      |
++------------------------------------------------------------------------------+
+
+EOF
+}
+
+print_brand_footer() {
+  cat <<'EOF'
+
++------------------------------------------------------------------------------+
+| Thank you for testing OnePlus 6T Arch Linux.                                  |
+| If this works for you, help fund the leap beyond the OnePlus 6T.             |
+| TARGET ACQUIRED: FAIRPHONE 5                                                 |
+| Fairphone 5 is the next hardware target.                                     |
+| Pocket PC dream: 1080p display-out, 5G, AI, GPU, repairable hardware.       |
+| Updates:  github.com/ToniMcQueen/oneplus6t-install-linux-Arch-on-arm-845     |
+| Pay $1+:  https://tonimcqueen.com/pay/                                      |
+| GoFund:   https://gofund.me/283160597                                      |
+| Contact:  contact@tonimcqueen.com                                          |
++------------------------------------------------------------------------------+
+EOF
+}
+
+confirm_after_banner() {
+  local answer
+
+  cat <<'EOF'
+First: this launcher checks USB/fastboot, then the installer builds the image.
+You will be prompted with warnings before any destructive fastboot flash.
+Nothing is flashed unless you later type FLASH at the final confirmation.
+
+EOF
+
+  while true; do
+    read -rp "Are you ready to continue? [y/N]: " answer
+    case "$answer" in
+      y|Y|yes|YES|Yes)
+        echo
+        return 0
+        ;;
+      n|N|no|NO|No|"")
+        echo "Stopped before phone checks, build, or flash."
+        exit 0
+        ;;
+      *)
+        echo "Please answer y or n."
+        ;;
+    esac
+  done
+}
+
+on_error() {
+  local status="$?"
+  local line="${1:-unknown}"
+  cat >&2 <<EOF
+
+Installer launcher stopped with exit status $status near line $line.
+
+Troubleshooting:
+  - If adb/fastboot is missing, install Android platform tools for your distro.
+  - If fastboot devices is empty, put the phone into fastboot mode and replug USB.
+  - If GitHub release download shows 404 on a private repo, authenticate gh or
+    make the repo public. A later "RELEASE_INPUTS_READY" means this was solved.
+  - If you see "doas", "sudo", or "su", that is your laptop/admin password,
+    not the phone password.
+  - The phone is not flashed until the installer asks for FLASH and you type it.
+  - If fastboot reboot fails at the end, manually start the phone from the
+    fastboot screen; the flash may already have completed successfully.
+
+EOF
+  print_brand_footer >&2
+  exit "$status"
+}
+
+trap 'on_error "$LINENO"' ERR
+
+find_repo_dir() {
+  if [[ -x "$SCRIPT_DIR/scripts/run-full-installer-from-start.sh" ]]; then
+    printf '%s\n' "$SCRIPT_DIR"
+    return 0
+  fi
+
+  if [[ -x "$PWD/scripts/run-full-installer-from-start.sh" ]]; then
+    printf '%s\n' "$PWD"
+    return 0
+  fi
+
+  for candidate in \
+    "$PWD/temp-oneplus-6t" \
+    "$PWD/oneplus6t-archlinux-installer" \
+    "$PWD/oneplus6t-arch-installer"; do
+    if [[ -x "$candidate/scripts/run-full-installer-from-start.sh" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+REPO_DIR="$(find_repo_dir || true)"
+if [[ -z "${REPO_DIR:-}" ]]; then
+  cat >&2 <<'EOF'
+Could not find the OnePlus 6T installer repo.
+
+Run this from the cloned repo, or from the parent directory containing one of:
+  temp-oneplus-6t
+  oneplus6t-archlinux-installer
+  oneplus6t-arch-installer
+EOF
+  exit 1
+fi
+
+cd "$REPO_DIR"
+
+print_brand_banner
+confirm_after_banner
+
+if ! command -v fastboot >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+Missing host command: fastboot
+
+Install Android platform tools first. On Arch-family hosts this is usually:
+  android-tools
+EOF
+  exit 1
+fi
+
+cat <<EOF
+OnePlus 6T Arch Linux public installer
+
+Repo:    $PWD
+Profile: $PROFILE
+
+This launcher runs the public install path:
+  1. ./scripts/check-phone.sh
+  2. fastboot devices -l
+  3. ./scripts/run-full-installer-from-start.sh $PROFILE
+
+The first two steps do not unlock, wipe, or flash the phone.
+The final installer may ask for your laptop/admin password through doas, sudo,
+or su. The destructive phone flash happens only if you later type FLASH at the
+installer's confirmation prompt.
+
+Safe stop points:
+  - Before Step 3, answer N at the continue prompt.
+  - Inside the installer, press Enter instead of typing FLASH.
+
+EOF
+
+echo "== Step 1/3: phone visibility check =="
+./scripts/check-phone.sh
+
+echo
+echo "== Step 2/3: fastboot device list =="
+FASTBOOT_LIST="$(fastboot devices -l || true)"
+printf '%s\n' "$FASTBOOT_LIST"
+if [[ -z "$FASTBOOT_LIST" ]]; then
+  cat >&2 <<'EOF'
+
+No fastboot device is listed.
+
+Put the OnePlus 6T into fastboot mode, use a direct USB port, then rerun this
+launcher. The installer is intentionally stopping before any build or flash.
+EOF
+  exit 1
+fi
+
+echo
+read -rp "Continue to the from-start build/install wrapper? [y/N]: " CONFIRM
+if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
+  echo "Stopped before build/install wrapper."
+  exit 0
+fi
+
+echo
+echo "== Step 3/3: from-start installer =="
+cat <<'EOF'
+The next script handles submodules, release-input download/verification,
+userdata-size detection, image build, preflight, and the final FLASH prompt.
+
+Expect a host admin password prompt if your system uses doas/sudo/su.
+Do not type FLASH at the later prompt unless you are ready to wipe and flash
+the phone userdata partition.
+
+EOF
+./scripts/run-full-installer-from-start.sh "$PROFILE"
+
+print_brand_footer

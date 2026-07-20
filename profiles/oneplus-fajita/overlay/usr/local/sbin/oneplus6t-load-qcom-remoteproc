@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -u
+
+modules=(
+  mdt_loader
+  qcom_pil_info
+  qcom_sysmon
+  qcom_q6v5_pas
+  fastrpc
+)
+
+log() {
+  printf 'oneplus6t-load-qcom-remoteproc: %s\n' "$*" >&2
+}
+
+for module in "${modules[@]}"; do
+  if lsmod | awk -v "module=$module" '$1 == module { found = 1 } END { exit !found }'; then
+    log "$module already loaded"
+    continue
+  fi
+
+  if modprobe "$module"; then
+    log "loaded $module"
+  else
+    log "failed to load $module"
+  fi
+done
+
+exit 0

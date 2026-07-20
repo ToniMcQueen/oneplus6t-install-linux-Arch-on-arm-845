@@ -1,0 +1,6 @@
+[submodule "vendor/hyperrotation"]
+	path = vendor/hyperrotation
+	url = https://github.com/mcqueentrading/oneplus6t-hyper-rotation.git
+[submodule "vendor/wvkbd"]
+	path = vendor/wvkbd
+	url = https://github.com/jjsullivan5196/wvkbd.git

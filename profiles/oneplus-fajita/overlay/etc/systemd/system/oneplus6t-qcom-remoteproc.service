@@ -1,0 +1,15 @@
+[Unit]
+Description=Load OnePlus 6T Qualcomm remoteproc modules after PMOS helpers
+DefaultDependencies=no
+Wants=pmos-compat-tqftpserv.service pmos-compat-rmtfs.service pmos-compat-pd-mapper.service
+After=systemd-udevd.service systemd-udev-trigger.service systemd-modules-load.service
+After=pmos-compat-tqftpserv.service pmos-compat-rmtfs.service pmos-compat-pd-mapper.service
+Before=hexagonrpcd-sdsp.service NetworkManager.service ModemManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/oneplus6t-load-qcom-remoteproc
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Build and install HyperRotation Hyprland plugin
+Documentation=https://github.com/mcqueentrading/oneplus6t-hyper-rotation
+After=local-fs.target
+ConditionPathExists=!/home/alarm/.config/hypr/plugins/hyperrotation.so
+
+[Service]
+Type=oneshot
+Environment=HYPERROTATION_REPO=https://github.com/mcqueentrading/oneplus6t-hyper-rotation.git
+Environment=HYPERROTATION_REF=38606861f25a2aec1eaefae38f3bcb8d0c332972
+ExecStart=/usr/local/sbin/oneplus6t-install-hyperrotation
+
+[Install]
+WantedBy=multi-user.target

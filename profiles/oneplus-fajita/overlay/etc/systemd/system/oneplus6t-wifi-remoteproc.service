@@ -1,0 +1,16 @@
+[Unit]
+Description=Late-load OnePlus 6T Wi-Fi remoteproc after PMOS helpers settle
+After=oneplus6t-qcom-radio.service NetworkManager.service ModemManager.service
+After=oneplus6t-hyperrotation-build.service oneplus6t-wvkbd-build.service
+Wants=oneplus6t-qcom-radio.service NetworkManager.service
+
+[Service]
+Type=oneshot
+Environment=ONEPLUS6T_DESKTOP_READY_MARKER=/run/user/1000/oneplus6t-desktop-ready
+Environment=ONEPLUS6T_DESKTOP_READY_WAIT_SECONDS=180
+Environment=ONEPLUS6T_WIFI_FINAL_DELAY_SECONDS=60
+ExecStart=/usr/local/sbin/oneplus6t-load-wifi-remoteproc
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

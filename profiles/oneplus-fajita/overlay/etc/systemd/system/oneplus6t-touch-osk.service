@@ -1,0 +1,22 @@
+[Unit]
+Description=Show OnePlus 6T wvkbd keyboard from touch gestures
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+ConditionPathExists=/usr/local/sbin/oneplus6t-touch-osk
+
+[Service]
+Type=simple
+User=root
+Environment=ONEPLUS6T_TOUCH_OSK_COOLDOWN_MS=700
+Environment=ONEPLUS6T_TOUCH_OSK_RUN_BIN=/usr/local/bin/oneplus6t-osk
+Environment=ONEPLUS6T_TOUCH_OSK_FINGERS=1
+Environment="ONEPLUS6T_TOUCH_OSK_TAP_FINGERS=1 2 3 4"
+Environment=ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE=1
+Environment=ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_START_MIN_Y=1650
+Environment=ONEPLUS6T_TOUCH_OSK_BOTTOM_SWIPE_MIN_DISTANCE=180
+ExecStart=/usr/local/sbin/oneplus6t-touch-osk
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

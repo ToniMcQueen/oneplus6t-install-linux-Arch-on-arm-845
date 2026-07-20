@@ -1,0 +1,341 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG="${ONEPLUS6T_MOBILE_DATA_CONFIG:-/etc/oneplus6t-mobile-data.conf}"
+
+AUTO_CONNECT="${AUTO_CONNECT:-no}"
+APN="${APN:-}"
+APN_USER="${APN_USER:-}"
+APN_PASSWORD="${APN_PASSWORD:-}"
+IP_TYPE="${IP_TYPE:-ipv4}"
+ROUTE_METRIC="${ROUTE_METRIC:-700}"
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-60}"
+MODEM_INDEX="${MODEM_INDEX:-0}"
+ALLOW_EMPTY_APN="${ALLOW_EMPTY_APN:-no}"
+
+if [[ -r "$CONFIG" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG"
+fi
+
+log() {
+  printf 'oneplus6t-mobile-data: %s\n' "$*" >&2
+}
+
+lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  oneplus6t-mobile-data configure --apn APN [--user USER] [--password PASS] [--auto-connect yes|no]
+  oneplus6t-mobile-data config
+  oneplus6t-mobile-data connect [--apn APN] [--user USER] [--password PASS]
+  oneplus6t-mobile-data disconnect
+  oneplus6t-mobile-data status
+  oneplus6t-mobile-data service
+
+The service action only connects when AUTO_CONNECT=yes in
+/etc/oneplus6t-mobile-data.conf.
+EOF
+}
+
+ACTION="${1:-connect}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --apn)
+      APN="${2:-}"
+      shift 2
+      ;;
+    --user)
+      APN_USER="${2:-}"
+      shift 2
+      ;;
+    --password)
+      APN_PASSWORD="${2:-}"
+      shift 2
+      ;;
+    --ip-type)
+      IP_TYPE="${2:-ipv4}"
+      shift 2
+      ;;
+    --metric)
+      ROUTE_METRIC="${2:-700}"
+      shift 2
+      ;;
+    --auto-connect)
+      AUTO_CONNECT="${2:-no}"
+      shift 2
+      ;;
+    --modem)
+      MODEM_INDEX="${2:-0}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      log "unknown argument: $1"
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+need_root_for_config() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    log "configure must run as root to write $CONFIG"
+    exit 1
+  fi
+}
+
+validate_yes_no() {
+  case "$(lower "$1")" in
+    yes|no) ;;
+    *)
+      log "expected yes or no, got: $1"
+      exit 2
+      ;;
+  esac
+}
+
+write_config() {
+  local tmp
+
+  need_root_for_config
+  validate_yes_no "$AUTO_CONNECT"
+
+  tmp="$(mktemp)"
+  {
+    cat <<'EOF'
+# OnePlus 6T mobile data helper configuration.
+#
+# Public images keep auto-connect enabled for boot-time bring-up by default.
+# APN settings remain carrier specific; set yours with
+# `oneplus6t-mobile-data configure --apn ...` when needed.
+
+EOF
+    printf 'AUTO_CONNECT=%q\n' "$(lower "$AUTO_CONNECT")"
+    printf 'APN=%q\n' "$APN"
+    printf 'APN_USER=%q\n' "$APN_USER"
+    printf 'APN_PASSWORD=%q\n' "$APN_PASSWORD"
+    printf 'IP_TYPE=%q\n' "$IP_TYPE"
+    printf 'ROUTE_METRIC=%q\n' "$ROUTE_METRIC"
+    printf 'CONNECT_TIMEOUT=%q\n' "$CONNECT_TIMEOUT"
+    printf 'MODEM_INDEX=%q\n' "$MODEM_INDEX"
+    printf 'ALLOW_EMPTY_APN=%q\n' "$ALLOW_EMPTY_APN"
+  } > "$tmp"
+
+  install -m 0600 -o root -g root "$tmp" "$CONFIG"
+  rm -f "$tmp"
+  log "wrote $CONFIG"
+}
+
+show_config() {
+  printf 'CONFIG=%s\n' "$CONFIG"
+  printf 'AUTO_CONNECT=%s\n' "$AUTO_CONNECT"
+  printf 'APN=%s\n' "${APN:-<unset>}"
+  printf 'APN_USER=%s\n' "${APN_USER:-<unset>}"
+  if [[ -n "$APN_PASSWORD" ]]; then
+    printf 'APN_PASSWORD=<set>\n'
+  else
+    printf 'APN_PASSWORD=<unset>\n'
+  fi
+  printf 'IP_TYPE=%s\n' "$IP_TYPE"
+  printf 'ROUTE_METRIC=%s\n' "$ROUTE_METRIC"
+  printf 'CONNECT_TIMEOUT=%s\n' "$CONNECT_TIMEOUT"
+  printf 'MODEM_INDEX=%s\n' "$MODEM_INDEX"
+}
+
+wait_for_modem() {
+  local i
+  for i in $(seq 1 60); do
+    if mmcli -m "$MODEM_INDEX" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "modem $MODEM_INDEX did not appear"
+  exit 1
+}
+
+kv_get() {
+  local key="$1"
+  awk -F: -v wanted="$key" '
+    {
+      key = $1
+      value = $0
+      sub(/^[^:]*:[[:space:]]*/, "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (key == wanted) {
+        print value
+        exit
+      }
+    }
+  '
+}
+
+current_bearer() {
+  mmcli -m "$MODEM_INDEX" --output-keyvalue 2>/dev/null \
+    | kv_get "modem.generic.bearers" \
+    | awk '$0 != "--" { print; exit }'
+}
+
+wait_for_bearer() {
+  local i bearer
+  for i in $(seq 1 20); do
+    bearer="$(current_bearer || true)"
+    if [[ -n "$bearer" ]]; then
+      printf '%s\n' "$bearer"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+connect_modem() {
+  local connect_args connect_output bearer
+
+  wait_for_modem
+
+  bearer="$(current_bearer || true)"
+  if [[ -z "$bearer" ]]; then
+    if [[ -z "$APN" && "$(lower "$ALLOW_EMPTY_APN")" != "yes" ]]; then
+      log "APN is not set; edit $CONFIG or pass --apn"
+      exit 2
+    fi
+
+    connect_args="ip-type=${IP_TYPE}"
+    if [[ -n "$APN" ]]; then
+      connect_args="apn=${APN},${connect_args}"
+    fi
+    if [[ -n "$APN_USER" ]]; then
+      connect_args="${connect_args},user=${APN_USER}"
+    fi
+    if [[ -n "$APN_PASSWORD" ]]; then
+      connect_args="${connect_args},password=${APN_PASSWORD}"
+    fi
+
+    log "starting ModemManager bearer"
+    if ! connect_output="$(timeout "$CONNECT_TIMEOUT" mmcli -m "$MODEM_INDEX" --simple-connect="$connect_args" 2>&1)"; then
+      printf '%s\n' "$connect_output" >&2
+      exit 1
+    fi
+    printf '%s\n' "$connect_output"
+    bearer="$(printf '%s\n' "$connect_output" | awk '/successfully connected the modem at bearer/ { print $NF; exit }')"
+    if [[ -z "$bearer" ]]; then
+      bearer="$(wait_for_bearer || true)"
+    fi
+  fi
+
+  if [[ -z "$bearer" ]]; then
+    log "no connected bearer found"
+    exit 1
+  fi
+
+  apply_bearer_ipv4 "$bearer"
+}
+
+apply_bearer_ipv4() {
+  local bearer="$1"
+  local kv iface method address prefix gateway dns mtu dns_values
+
+  kv="$(mmcli -b "$bearer" --output-keyvalue)"
+  iface="$(printf '%s\n' "$kv" | kv_get "bearer.status.interface")"
+  method="$(printf '%s\n' "$kv" | kv_get "bearer.ipv4-config.method")"
+  address="$(printf '%s\n' "$kv" | kv_get "bearer.ipv4-config.address")"
+  prefix="$(printf '%s\n' "$kv" | kv_get "bearer.ipv4-config.prefix")"
+  gateway="$(printf '%s\n' "$kv" | kv_get "bearer.ipv4-config.gateway")"
+  mtu="$(printf '%s\n' "$kv" | kv_get "bearer.ipv4-config.mtu")"
+
+  if [[ "$method" != "static" || -z "$iface" || "$iface" == "--" || -z "$address" || "$address" == "--" ]]; then
+    log "bearer has no usable static IPv4 settings"
+    exit 1
+  fi
+
+  ip link set "$iface" up
+  ip addr flush dev "$iface" || true
+  ip addr add "${address}/${prefix:-30}" dev "$iface"
+
+  if [[ -n "$mtu" && "$mtu" != "--" ]]; then
+    ip link set dev "$iface" mtu "$mtu" 2>/dev/null || true
+  fi
+  if [[ -n "$gateway" && "$gateway" != "--" ]]; then
+    ip route replace default via "$gateway" dev "$iface" metric "$ROUTE_METRIC"
+  fi
+
+  dns_values="$(printf '%s\n' "$kv" | awk -F: '
+    $1 ~ /^bearer\.ipv4-config\.dns\.value\[[0-9]+\][[:space:]]*$/ {
+      value = $0
+      sub(/^[^:]*:[[:space:]]*/, "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      if (value != "--") {
+        print value
+      }
+    }
+  ')"
+  if [[ -n "$dns_values" ]] && command -v resolvectl >/dev/null 2>&1 \
+      && systemctl -q is-active systemd-resolved.service; then
+    # shellcheck disable=SC2086
+    resolvectl dns "$iface" $dns_values || true
+    resolvectl domain "$iface" '~.' || true
+  fi
+
+  log "configured $iface with ${address}/${prefix:-30}"
+}
+
+disconnect_modem() {
+  mmcli -m "$MODEM_INDEX" --simple-disconnect || true
+}
+
+status_modem() {
+  wait_for_modem
+  mmcli -m "$MODEM_INDEX"
+  ip -br addr show type rmnet 2>/dev/null || true
+  ip -br addr show qmapmux0.0 2>/dev/null || true
+  ip route show table main
+}
+
+case "$ACTION" in
+  configure)
+    write_config
+    ;;
+  config)
+    show_config
+    ;;
+  service)
+    if [[ "$(lower "$AUTO_CONNECT")" != "yes" ]]; then
+      log "AUTO_CONNECT is not yes; skipping"
+      exit 0
+    fi
+    if [[ -z "$APN" && "$(lower "$ALLOW_EMPTY_APN")" != "yes" ]]; then
+      log "AUTO_CONNECT requested but APN is unset; skipping boot-time mobile-data connect"
+      exit 0
+    fi
+    if ! connect_modem; then
+      log "AUTO_CONNECT service failed; continuing boot with mobile data disconnected"
+    fi
+    ;;
+  connect)
+    connect_modem
+    ;;
+  disconnect)
+    disconnect_modem
+    ;;
+  status)
+    status_modem
+    ;;
+  *)
+    log "unknown action: $ACTION"
+    usage
+    exit 2
+    ;;
+esac

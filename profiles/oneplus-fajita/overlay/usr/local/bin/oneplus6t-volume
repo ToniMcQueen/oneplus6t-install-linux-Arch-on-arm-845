@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+action="${1:-}"
+step="${ONEPLUS6T_VOLUME_STEP:-5%}"
+
+case "$action" in
+  up)
+    if command -v wpctl >/dev/null 2>&1; then
+      exec wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ "$step+"
+    elif command -v pactl >/dev/null 2>&1; then
+      exec pactl set-sink-volume @DEFAULT_SINK@ "+$step"
+    elif command -v pamixer >/dev/null 2>&1; then
+      exec pamixer --increase "${step%%%}"
+    elif command -v amixer >/dev/null 2>&1; then
+      exec amixer sset Master "${step}+"
+    fi
+    ;;
+  down)
+    if command -v wpctl >/dev/null 2>&1; then
+      exec wpctl set-volume @DEFAULT_AUDIO_SINK@ "$step-"
+    elif command -v pactl >/dev/null 2>&1; then
+      exec pactl set-sink-volume @DEFAULT_SINK@ "-$step"
+    elif command -v pamixer >/dev/null 2>&1; then
+      exec pamixer --decrease "${step%%%}"
+    elif command -v amixer >/dev/null 2>&1; then
+      exec amixer sset Master "${step}-"
+    fi
+    ;;
+  mute)
+    if command -v wpctl >/dev/null 2>&1; then
+      exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+    elif command -v pactl >/dev/null 2>&1; then
+      exec pactl set-sink-mute @DEFAULT_SINK@ toggle
+    elif command -v pamixer >/dev/null 2>&1; then
+      exec pamixer --toggle-mute
+    elif command -v amixer >/dev/null 2>&1; then
+      exec amixer sset Master toggle
+    fi
+    ;;
+esac
+
+printf 'oneplus6t-volume: no supported audio command for action %s\n' "$action" >&2
+exit 1

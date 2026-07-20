@@ -1,0 +1,8 @@
+# OnePlus 6T / fajita iio-sensor-proxy/libssc wiring.
+#
+# Arch's stock iio-sensor-proxy FastRPC rule tags SSC light/compass only.
+# The OnePlus 6T also needs the SSC accelerometer and proximity types exposed
+# here, plus the PMOS-derived mount matrix, before SensorProxy reports the
+# phone sensors over D-Bus.
+SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp*", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, 1, 0; 0, 0, -1"
+SUBSYSTEM=="misc", KERNEL=="fastrpc-sdsp*", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel ssc-proximity", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, 1, 0; 0, 0, -1"

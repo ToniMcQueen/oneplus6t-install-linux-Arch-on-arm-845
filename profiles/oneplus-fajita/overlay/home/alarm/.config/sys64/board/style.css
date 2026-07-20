@@ -1,0 +1,49 @@
+#sysboard {
+    background: rgba(20, 22, 26, 0.5);
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 0;
+}
+
+#sysboard label {
+    background: rgba(48, 52, 60, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 5px;
+    color: rgba(255, 255, 255, 0.95);
+    margin: 3px 1px;
+    padding: 0;
+    min-width: 0;
+    min-height: 0;
+    box-shadow: none;
+    font-size: 14px;
+}
+
+#sysboard .key-Shift label,
+#sysboard .key-Backspace label,
+#sysboard .key-Space label,
+#sysboard .key-Enter label {
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 22px;
+    font-size: 0;
+}
+
+#sysboard .key-Shift label {
+    background-image: -gtk-icontheme("keyboard-shift-symbolic");
+}
+
+#sysboard .key-Backspace label {
+    background-image: -gtk-icontheme("edit-clear-symbolic");
+}
+
+#sysboard .key-Space label {
+    background-image: -gtk-icontheme("keyboard-spacebar");
+}
+
+#sysboard .key-Enter label {
+    background-image: -gtk-icontheme("keyboard-enter");
+}
+
+#sysboard .key.toggled label,
+#sysboard .key.pressed label {
+    background: rgba(110, 118, 132, 0.5);
+}

@@ -1,0 +1,29 @@
+From: LinuxPhone project <linuxphone@localhost>
+Subject: [PATCH] media: qcom: camss: set the CSID C-PHY selector bit correctly
+
+The development branch used a chained compound assignment. Because `cphy` is
+a boolean, the `1 << 24` mask was converted to true before being ORed into the
+register value. Set the hardware selector bit only for C-PHY links instead.
+
+This is required by the OnePlus main rear IMX519 sensor. The IMX371 and IMX376
+paths use D-PHY and do not exercise this selector.
+---
+ drivers/media/platform/qcom/camss/camss-csid-gen2.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-csid-gen2.c b/drivers/media/platform/qcom/camss/camss-csid-gen2.c
+--- a/drivers/media/platform/qcom/camss/camss-csid-gen2.c
++++ b/drivers/media/platform/qcom/camss/camss-csid-gen2.c
+@@ -188,7 +188,8 @@ static void __csid_configure_rx(struct csid_device *csid,
+ 	val = (lane_cnt - 1) << CSI2_RX_CFG0_NUM_ACTIVE_LANES;
+ 	val |= phy->lane_assign << CSI2_RX_CFG0_DL0_INPUT_SEL;
+ 	val |= phy->csiphy_id << CSI2_RX_CFG0_PHY_NUM_SEL;
+-	val |= csid->phy.cphy |= 1 << CSI2_RX_CFG0_PHY_TYPE_SEL;
++	if (phy->cphy)
++		val |= 1 << CSI2_RX_CFG0_PHY_TYPE_SEL;
+ 	writel_relaxed(val, csid->base + CSID_CSI2_RX_CFG0);
+ 
+ 	val = 1 << CSI2_RX_CFG1_PACKET_ECC_CORRECTION_EN;
+-- 
+2.50.1
+
