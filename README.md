@@ -53,12 +53,10 @@ The installer still stops before the destructive flash and asks you to type
 
 ## What You Get
 
-This is a practical Linux-phone preview for people who want to test real
-hardware rather than read a concept thread. The private/sponsored line is also
-where the more complete phone experience is integrated before anything is
-promoted outward.
+This is a practical Linux-phone for people who want to test real
+hardware rather than read a concept thread.
 
-| Surface | Current sponsored development behavior |
+| Surface | Current development behavior |
 | --- | --- |
 | One-command entrypoint | `bash ./oneplus6t-install` checks USB/fastboot state, then hands off to the strict installer |
 | Release inputs | GitHub Release bundle fetch, SHA-256 verification, PMOS boot artifacts, firmware packages, and local aarch64 packages |
@@ -124,12 +122,9 @@ and well-supported enough by mainline-adjacent SDM845 work to be a serious
 Linux-phone proving ground. This repository turns that into something people
 can actually run:
 
-- a repeatable install path rather than a private lab image;
+- a repeatable install path rather than a experiment;
 - a clear hardware feature map rather than vague screenshots;
 - a conservative default kernel rather than crash-prone research features;
-- documented CLI primitives for people building their own phone UI;
-- a sponsor-ready profile that avoids private credentials and personal setup
-  files while still exposing the advanced development work.
 
 Project funding page:
 
@@ -261,16 +256,13 @@ installer. Do not relock the bootloader while this image is installed.
 ## Fast Install Path
 
 If the bootloader is already unlocked and the phone is already in fastboot
-mode, the sponsored install flow is intentionally short:
+mode,the install flow is intentionally short:
 
 ```sh
 git clone https://github.com/ToniMcQueen/oneplus6t-install-linux-Arch-on-arm-845.git
 cd oneplus6t-install-linux-Arch-on-arm-845
 ./oneplus6t-install
 ```
-
-Because this repository is private, clone access requires the GitHub account
-that was granted sponsor repository access.
 
 The one-file launcher prints troubleshooting notes and then runs:
 
@@ -798,7 +790,7 @@ flowchart LR
 | Keyboard | `wvkbd-deskintl` with desktop/Linux keys and phone sizing | Included |
 | Launcher/terminal | `SUPER+Q` terminal; app launcher intentionally left to user choice | Terminal included; launcher unforced |
 | Rotation | PMOS-style Hexagon/SensorProxy path plus HyperRotation | Included; rotation is functional rather than visually polished |
-| Wi-Fi | Late `ath10k_snoc` load path after modem/rmtfs timing | Included; no private credentials |
+| Wi-Fi | Late `ath10k_snoc` load path after modem/rmtfs timing
 | Mobile data | ModemManager/qmapmux data path with local APN helper | Included; no carrier credentials |
 | Calls/SMS | GNOME Calls, Chatty, ModemManager, callaudiod, route watcher | Included; carrier/SIM behavior still needs user validation |
 | Audio | Media loudspeaker, call earpiece, speakerphone, and mic route helpers | Included |
@@ -834,7 +826,7 @@ Current hardware validation highlights:
 ```text
 display: DSI-1 1080x2340@60 through Hyprland
 GPU: Freedreno FD630 GL smoke passed during bring-up; diagnostic benchmark tools are not installed by default
-Wi-Fi: wlan0 present; NetworkManager path included, no private credentials stored in repo
+Wi-Fi: wlan0 present; NetworkManager path included,
 cellular: SIM/UIM selection and ModemManager PDP/qmapmux helper paths included
 mobile APN setup: use oneplus6t-mobile-data configure; images do not embed carrier credentials
 Bluetooth: BlueZ path included
@@ -1068,24 +1060,7 @@ PMOS compatibility/reference payloads into the paths expected by the builders.
 The repo stays source-clean while the GitHub Release carries the large/generated
 inputs.
 
-If you are testing from a private fork, GitHub's unauthenticated release
-download URL may return `404`. In that case, authenticate the GitHub CLI first
-and the fetch script will fall back to `gh release download`:
 
-```text
-gh auth login
-```
-
-The strict from-start installer initializes source submodules automatically, but
-manual builders can do it explicitly:
-
-```text
-git submodule update --init --recursive
-```
-
-If host tools such as `curl`, `tar`, `zstd`, or `sha256sum` are missing on an
-Arch-family host, the script detects `pacman`, `paru`, or `yay` and prints the
-right install command. To let it install the missing host tools automatically:
 
 ```text
 scripts/fetch-release-inputs.sh --install-deps
@@ -1427,9 +1402,7 @@ can flash it with:
 ```
 
 The extracted bundle includes only the already-built boot/root images, the
-minimal flash scripts, checksums, and a manifest. It does not include the build
-cache, `work/`, local screenshots, or private setup files.
-
+minimal flash scripts, checksums, and a manifest. 
 ## Flashing
 
 Warning: flashing userdata erases the phone's userdata partition.
